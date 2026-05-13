@@ -105,17 +105,25 @@ jobs:
           sed -i 's/^BETTER_AUTH_SECRET=$/BETTER_AUTH_SECRET=ci-placeholder-secret/' .env
           sed -i 's/^MANIFEST_ENCRYPTION_KEY=$/MANIFEST_ENCRYPTION_KEY=ci-placeholder-key/' .env
 
-      - name: opencode snippet parses as JSON
+      - name: opencode snippet is parseable JSON on stdout
         run: |
-          ./stack opencode \
-            | sed '/^#/d; /^$/d' \
+          # Prose goes to stderr; stdout must be a single JSON document.
+          ./stack opencode 2>/dev/null \
             | python3 -c 'import json,sys; json.load(sys.stdin)'
 
-      - name: claudcode snippet contains both JSON blocks
+      - name: claude snippet is parseable JSON with both settings blocks
         run: |
-          out="$(./stack claudcode)"
-          echo "$out" | grep -q 'ANTHROPIC_BASE_URL'
-          echo "$out" | grep -q 'ANTHROPIC_AUTH_TOKEN'
+          ./stack claude 2>/dev/null \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "settings" in d and "settings_local" in d, d.keys(); assert d["settings"]["env"]["ANTHROPIC_BASE_URL"]; assert d["settings_local"]["env"]["ANTHROPIC_AUTH_TOKEN"]'
+
+  routes-config:
+    name: proxy.routes.example.json is valid JSON
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse routes example
+        run: |
+          python3 -c 'import json; r=json.load(open("proxy.routes.example.json")); assert isinstance(r, list) and all("pathPrefix" in x and "host" in x for x in r), r'
 
   proxy-syntax:
     name: provider-proxy syntax check

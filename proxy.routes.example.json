@@ -1,0 +1,11 @@
+[
+  {
+    "pathPrefix": "/kimi",
+    "host": "api.kimi.com",
+    "headers": { "x-app": "cli" }
+  },
+  {
+    "pathPrefix": "/openai",
+    "host": "api.openai.com"
+  }
+]
