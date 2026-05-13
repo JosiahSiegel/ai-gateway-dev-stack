@@ -72,6 +72,81 @@ cd ai-gateway-dev-stack
 ./stack up
 ```
 
+## Cheap cloud deployment
+
+The cheapest practical way to run this stack in the cloud is a single small VPS
+with Docker Compose. A 2 vCPU / 4 GB RAM instance is enough for the stack plus
+Postgres, and it keeps the only persistent state (`manifest_pgdata`) on one disk.
+
+Recommended setup:
+
+- Hetzner CX22 or similar small VPS
+- Ubuntu 24.04
+- Docker + Docker Compose plugin
+- Tailscale for private access instead of public ingress
+
+On the VM:
+
+```bash
+git clone --recurse-submodules https://github.com/JosiahSiegel/ai-gateway-dev-stack.git
+cd ai-gateway-dev-stack
+./stack up
+```
+
+For a fresh VM, two equivalent one-shot bootstraps are included — both install
+Docker, clone the repo, and run `./stack up`:
+
+- `cloud-init.yaml` — paste into your provider's user-data field.
+- `bootstrap-vps.sh` — `curl -fsSL .../bootstrap-vps.sh | sudo bash` on the VM.
+
+If you want private access over tailnet, set the Tailscale env vars in `.env`
+and run `./stack up --profile tailnet`.
+
+### Hetzner specifics
+
+1. Sign in at <https://console.hetzner.com/> → **Add Server**.
+2. Image: **Ubuntu 24.04**. Type: **CX22** (x86) or **CAX11** (ARM, cheaper).
+3. Paste `cloud-init.yaml` into the **Cloud config** field.
+4. Create a **Firewall** that allows only **22/tcp** inbound. Do not expose
+   ports `2099`, `2100`, or `9997` to the public internet.
+5. SSH in once it boots, edit `.env`, then either `./stack restart` or, with
+   Tailscale creds set, `./stack restart --profile tailnet`.
+
+To make the VM itself a tailnet node (recommended — lets you drop public SSH):
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up --ssh
+```
+
+### Other cheap VPS options
+
+If Hetzner asks for ID verification or you want a different provider, these are
+reasonable fallback choices:
+
+- **Contabo VPS-S** — cheapest raw value; 4 vCPU / 8 GB RAM / 200 GB SSD. Card-only,
+  cloud-init supported. Tradeoff: noisier storage and slower provisioning.
+- **Oracle Cloud Always Free** — $0 if you can get capacity. Tradeoff: capacity
+  is inconsistent and accounts can be reaped if idle.
+- **DigitalOcean Basic** — simplest setup, but more expensive.
+- **Vultr** — similar to DigitalOcean in price and experience.
+
+The same `cloud-init.yaml` and `bootstrap-vps.sh` work for all of them.
+
+### Linux note
+
+On Linux hosts, add this to the `homepage` service in `compose.yml` so
+containers can resolve the host proxy the same way Docker Desktop does:
+
+```yaml
+extra_hosts:
+  - "host.docker.internal:host-gateway"
+```
+
+Without it, Manifest may not be able to reach `http://host.docker.internal:9997/...`
+from inside the container.
+
+
 `./stack up` will, in order:
 
 1. Initialize the `manifest-local` and `provider-proxy` submodules if needed.
