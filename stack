@@ -94,6 +94,29 @@ env_get() {
   ' "$ENV_FILE"
 }
 
+manifest_base_url() {
+  local base_url port
+  base_url="$(env_get CLAUDE_CODE_MANIFEST_URL)"
+  if [ -z "$base_url" ]; then
+    base_url="$(env_get BETTER_AUTH_URL)"
+  fi
+  if [ -z "$base_url" ] || [[ "$base_url" == http://localhost:* ]]; then
+    port="$(env_get PORT)"; port="${port:-2099}"
+    base_url="http://localhost:${port}/"
+  fi
+  case "$base_url" in */) ;; *) base_url="${base_url}/" ;; esac
+  printf '%s\n' "$base_url"
+}
+
+manifest_openai_base_url() {
+  local base_url
+  base_url="${1%/}"
+  case "$base_url" in
+    */v1) printf '%s\n' "$base_url" ;;
+    *) printf '%s/v1\n' "$base_url" ;;
+  esac
+}
+
 # --- proxy lifecycle (host process, not Docker) ----------------------------
 
 proxy_running() {
@@ -233,9 +256,12 @@ cmd_pull() {
 }
 
 cmd_opencode() {
-  local proxy_port port
+  local proxy_port base_url openai_base_url model
   proxy_port="$(env_get PROXY_PORT)"; proxy_port="${proxy_port:-9997}"
-  port="$(env_get PORT)"; port="${port:-2099}"
+  base_url="$(manifest_base_url)"
+  openai_base_url="$(manifest_openai_base_url "$base_url")"
+  model="$(env_get CLAUDE_CODE_MODEL)"
+  model="${model:-manifest/auto}"
   cat <<EOF
 # Drop into ~/.config/opencode/opencode.json (or this project's opencode.json).
 # Manifest is the recommended entry point — it gives you logging, usage, and
@@ -248,9 +274,9 @@ cmd_opencode() {
       "name": "Manifest",
       "options": {
         "npm": "@ai-sdk/openai-compatible",
-        "baseURL": "http://localhost:${port}/v1"
+        "baseURL": "${openai_base_url}"
       },
-      "models": { "auto": { "name": "Manifest Auto" } }
+      "models": { "${model#manifest/}": { "name": "Manifest Auto" } }
     },
     "proxy-openai": {
       "name": "Proxy -> OpenAI",
@@ -273,16 +299,7 @@ EOF
 
 cmd_claudcode() {
   local base_url model
-  base_url="$(env_get CLAUDE_CODE_MANIFEST_URL)"
-  if [ -z "$base_url" ]; then
-    base_url="$(env_get BETTER_AUTH_URL)"
-  fi
-  if [ -z "$base_url" ] || [[ "$base_url" == http://localhost:* ]]; then
-    local port
-    port="$(env_get PORT)"; port="${port:-2099}"
-    base_url="http://localhost:${port}/"
-  fi
-  case "$base_url" in */) ;; *) base_url="${base_url}/" ;; esac
+  base_url="$(manifest_base_url)"
 
   model="$(env_get CLAUDE_CODE_MODEL)"
   model="${model:-manifest/auto}"

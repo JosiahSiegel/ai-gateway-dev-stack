@@ -3,3 +3,4 @@
 .stack/
 *.log
 .DS_Store
+.claude
