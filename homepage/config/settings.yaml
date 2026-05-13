@@ -1,0 +1,28 @@
+# Homepage global settings.
+# Full reference: https://gethomepage.dev/configs/settings/
+
+title: AI Gateway Stack
+headerStyle: clean
+language: en
+theme: dark
+color: slate
+
+# Show service status badges. Health checks come from the Docker integration
+# (homepage.siteMonitor labels) and the static services.yaml entries.
+statusStyle: dot
+
+# Quicklaunch — press `/` to focus an in-page filter. Typing instantly
+# narrows the visible service tiles; Enter opens the first match. Falls
+# through to a web search if nothing matches and hideInternetSearch is false.
+quicklaunch:
+  searchDescriptions: true
+  hideInternetSearch: true
+  hideVisitURL: true
+
+layout:
+  AI Gateway Stack:
+    style: row
+    columns: 3
+  Tailnet:
+    style: row
+    columns: 4

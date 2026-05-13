@@ -4,17 +4,74 @@
 #   docker compose --project-directory . --env-file .env \
 #     -f manifest-local/docker-compose.yml \
 #     -f compose.yml \
-#     up -d
+#     [--profile tailnet] up -d
 #
-# Intentionally minimal: manifest-local already sets up everything (services,
-# networks, extra_hosts: host.docker.internal). The provider-proxy runs on
-# the host (it binds 127.0.0.1 by design), managed by the ./stack script.
+# manifest-local owns the real Manifest + Postgres services, networks, and
+# pinned volume. Do NOT override `name:` here — manifest-local pins `mnfst`
+# so existing standalone installs keep their containers/volumes.
 #
-# We deliberately do NOT override `name:` here — manifest-local pins
-# `name: mnfst`, and keeping it means any existing standalone install of
-# manifest-local picks up its same containers / volumes when running via
-# `./stack up`. No data migration needed.
+# This file adds:
+#   - homepage    : gethomepage.dev dashboard (Docker label auto-discovery)
+#   - tailnet-poller : optional sidecar that mirrors tailnet devices into
+#                      homepage/config/services.yaml (profile: tailnet)
 #
-# Add overrides here when you need to extend Manifest's compose config
-# without touching the manifest-local submodule (e.g. additional env vars,
-# extra services that should share the same docker network).
+# The provider-proxy still runs on the host (it binds 127.0.0.1 by design),
+# managed by the ./stack script — it is not a container.
+
+services:
+  # Manifest is intentionally NOT decorated with homepage.* labels here.
+  # The tailnet-poller surfaces it via the VIP services API ("Tailscale
+  # Services" group), which has the correct tailnet URL. Labeling it
+  # additionally would create a duplicate tile pointing at localhost.
+
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    ports:
+      - "${HOMEPAGE_PORT:-2100}:3000"
+    environment:
+      # CSRF allow-list. Defaults to localhost:${HOMEPAGE_PORT}; override in
+      # .env when reaching homepage via a tailnet hostname, e.g.
+      # HOMEPAGE_ALLOWED_HOSTS=localhost:2100,dash.tailXXXXXX.ts.net
+      HOMEPAGE_ALLOWED_HOSTS: ${HOMEPAGE_ALLOWED_HOSTS:-localhost:${HOMEPAGE_PORT:-2100}}
+      # Exposed to YAML configs as {{HOMEPAGE_VAR_TS_DOMAIN}}.
+      HOMEPAGE_VAR_TS_DOMAIN: ${TAILSCALE_TS_DOMAIN:-}
+    volumes:
+      - ./homepage/config:/app/config
+      # Read-only socket mount enables Docker label auto-discovery. Any
+      # container in this stack with homepage.* labels appears automatically.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - frontend
+    labels:
+      homepage.group: "AI Gateway Stack"
+      homepage.name: "Homepage"
+      homepage.icon: "mdi-view-dashboard"
+      homepage.href: "${HOMEPAGE_PUBLIC_URL:-http://localhost:${HOMEPAGE_PORT:-2100}}"
+      homepage.description: "Service dashboard (this page)"
+
+  # Optional. Activated by ./stack when TAILSCALE_API_KEY is set in .env, or
+  # manually: docker compose --profile tailnet up -d
+  tailnet-poller:
+    image: node:22-alpine
+    container_name: tailnet-poller
+    restart: unless-stopped
+    command: ["node", "/work/poll.js"]
+    environment:
+      TAILSCALE_API_KEY: ${TAILSCALE_API_KEY:-}
+      TAILSCALE_OAUTH_CLIENT_ID: ${TAILSCALE_OAUTH_CLIENT_ID:-}
+      TAILSCALE_OAUTH_CLIENT_SECRET: ${TAILSCALE_OAUTH_CLIENT_SECRET:-}
+      TAILSCALE_TAILNET: ${TAILSCALE_TAILNET:--}
+      TAILSCALE_TS_DOMAIN: ${TAILSCALE_TS_DOMAIN:-}
+      TAILSCALE_TAG_FILTER: ${TAILSCALE_TAG_FILTER:-}
+      POLL_INTERVAL_MS: ${TAILSCALE_POLL_INTERVAL_MS:-60000}
+      TEMPLATE_PATH: /template/services.template.yaml
+      OUTPUT_PATH: /output/services.yaml
+    volumes:
+      - ./homepage/tailnet-poller:/work:ro
+      - ./homepage/services.template.yaml:/template/services.template.yaml:ro
+      - ./homepage/config:/output
+    networks:
+      - frontend
+    profiles: ["tailnet"]

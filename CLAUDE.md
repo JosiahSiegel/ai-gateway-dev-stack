@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Purpose
 
-This repo is the parent orchestration layer for a local AI gateway stack. It combines two submodules:
+This repo is the parent orchestration layer for a local AI gateway stack. It combines two submodules plus parent-owned services:
 
 - `manifest-local/` — Docker Compose deployment for Manifest, the self-hosted AI gateway dashboard plus Postgres.
 - `provider-proxy/` — a host-running Node.js reverse proxy that injects headers and patches request bodies before forwarding to upstream LLM providers.
+- `homepage/` — parent-owned config + sidecar for the gethomepage.dev dashboard. Not a submodule; the homepage container is pulled from `ghcr.io/gethomepage/homepage:latest`.
 
 The parent repo wires the pieces together; it should avoid modifying submodule internals unless the task is explicitly about that submodule.
 
@@ -15,6 +16,9 @@ Runtime flow:
 
 ```text
 OpenCode / Claude Code -> Manifest (Docker :2099) -> provider-proxy (host :9997) -> upstream LLMs
+                                                                                     ^
+                          Homepage (Docker :2100) — landing page for the stack ------+
+                          + tailnet-poller (optional sidecar, profile: tailnet)
 ```
 
 Manifest reaches the host proxy from inside Docker via `host.docker.internal:${PROXY_PORT}`. The proxy intentionally runs on the host and binds `127.0.0.1` only.
@@ -28,6 +32,7 @@ Use the root `stack` script for normal development and operations:
 | Start full stack | `./stack up` | `.\stack.ps1 up` |
 | Stop full stack | `./stack down` | `.\stack.ps1 down` |
 | Restart stack | `./stack restart` | `.\stack.ps1 restart` |
+| Restart specific service(s) | `./stack restart <svc>...` | `.\stack.ps1 restart <svc>...` |
 | Show container and proxy status | `./stack status` | `.\stack.ps1 status` |
 | Tail Manifest, Postgres, and proxy logs | `./stack logs` | `.\stack.ps1 logs` |
 | Update submodules and Docker images | `./stack pull` | `.\stack.ps1 pull` |
@@ -64,6 +69,8 @@ Important root variables:
 - `PROXY_TARGET_HOST` / `PROXY_TARGET_PROTOCOL` / `PROXY_TARGET_PORT` — single-target alternative; use instead of `PROXY_TARGETS`.
 - `PROXY_USER_AGENT`, `PROXY_EXTRA_HEADERS`, `PROXY_DEBUG`, `PROXY_DEBUG_BODY` — mapped by `stack` to provider-proxy environment variables.
 - `CLAUDE_CODE_MANIFEST_URL`, `CLAUDE_CODE_MODEL` — used only by `./stack claudcode` to print Claude Code settings.
+- `HOMEPAGE_PORT`, `HOMEPAGE_ALLOWED_HOSTS` — homepage dashboard binding and CSRF allow-list.
+- `TAILSCALE_API_KEY`, `TAILSCALE_TAILNET`, `TAILSCALE_TS_DOMAIN`, `TAILSCALE_TAG_FILTER`, `TAILSCALE_POLL_INTERVAL_MS` — when `TAILSCALE_API_KEY` is set, `./stack` adds `--profile tailnet` and the tailnet-poller container rewrites `homepage/config/services.yaml` on a timer.
 
 Local-only files/directories are ignored: `.env`, `.env.local`, `.stack/`, logs, and `.claude/`.
 
@@ -100,6 +107,18 @@ docker compose --project-directory . --env-file .env -f manifest-local/docker-co
 - `manifest_pgdata` pinned volume.
 
 Refer to `manifest-local/CLAUDE.md` before making changes inside that submodule.
+
+### Homepage dashboard
+
+`homepage/` is parent-owned (no submodule). Layout:
+
+- `homepage/config/` — mounted into the container at `/app/config`. Contains `settings.yaml`, `widgets.yaml`, `bookmarks.yaml`, `docker.yaml`, and the generated `services.yaml` (gitignored).
+- `homepage/services.template.yaml` — user-editable source of truth. Seeded into `homepage/config/services.yaml` on first `./stack up`. When the tailnet-poller is running, it reads the template, appends a managed `- Tailnet:` group, and rewrites `services.yaml` atomically every tick.
+- `homepage/tailnet-poller/poll.js` — single-file zero-dep Node script that calls the Tailscale `/api/v2/tailnet/{tailnet}/devices` endpoint and renders the managed group.
+
+Stack-internal services (Manifest, homepage itself) appear via Docker label auto-discovery — labels live in `compose.yml` so we don't touch the `manifest-local` submodule. Anything else (host processes like the provider-proxy, or arbitrary external URLs) goes in `services.template.yaml`. Don't add a `- Tailnet:` group to the template by hand — anything after the `# --- managed: tailnet (do not edit below) ---` marker is overwritten by the poller.
+
+The poller runs under Compose profile `tailnet`. `./stack` adds `--profile tailnet` automatically when `TAILSCALE_API_KEY` is set in `.env`.
 
 ### provider-proxy submodule
 

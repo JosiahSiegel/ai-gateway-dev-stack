@@ -1,0 +1,13 @@
+# Bookmarks shown beneath services.
+# Full reference: https://gethomepage.dev/configs/bookmarks/
+
+- Docs:
+    - Manifest:
+        - abbr: MN
+          href: https://manifest.build
+    - Homepage:
+        - abbr: HP
+          href: https://gethomepage.dev
+    - Tailscale:
+        - abbr: TS
+          href: https://tailscale.com/kb

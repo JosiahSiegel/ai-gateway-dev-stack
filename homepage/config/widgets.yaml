@@ -1,0 +1,18 @@
+# Info widgets shown at the top of the page.
+# Full reference: https://gethomepage.dev/widgets/info/
+
+# Host resources as seen from inside the homepage container. CPU and memory
+# come from /proc on the container; disk reflects the container's view of the
+# filesystem (Docker Desktop on Windows/macOS shows the VM disk, not the host
+# drive directly). Set `expanded: true` to show absolute numbers, not just %.
+- resources:
+    cpu: true
+    memory: true
+    disk: /
+    expanded: true
+
+- datetime:
+    text_size: xl
+    format:
+      timeStyle: short
+      dateStyle: long

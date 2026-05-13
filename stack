@@ -3,7 +3,8 @@
 #
 #   ./stack up        Bring everything up (manifest + postgres + proxy)
 #   ./stack down      Stop everything
-#   ./stack restart   Restart everything
+#   ./stack restart           Restart everything
+#   ./stack restart <svc>...  Restart only the given compose service(s)
 #   ./stack status    Show what's running
 #   ./stack logs      Tail logs from manifest + proxy
 #   ./stack pull      Pull latest submodules + Docker images
@@ -25,9 +26,32 @@ ENV_FILE="$ROOT/.env"
 ENV_EXAMPLE="$ROOT/.env.example"
 
 COMPOSE_FILES=(-f manifest-local/docker-compose.yml -f compose.yml)
-COMPOSE=(docker compose --project-directory "$ROOT" --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}")
 
 mkdir -p "$STATE_DIR"
+
+# Build the compose command on demand so we can conditionally inject
+# --profile flags (e.g. enable the tailnet-poller when TAILSCALE_API_KEY is set).
+# True when the tailnet-poller has credentials to run — either a long-lived
+# API key or an OAuth client (id + secret).
+tailnet_enabled() {
+  [ -f "$ENV_FILE" ] || return 1
+  if [ -n "$(env_get TAILSCALE_API_KEY)" ]; then
+    return 0
+  fi
+  if [ -n "$(env_get TAILSCALE_OAUTH_CLIENT_ID)" ] && [ -n "$(env_get TAILSCALE_OAUTH_CLIENT_SECRET)" ]; then
+    return 0
+  fi
+  return 1
+}
+
+compose() {
+  local profiles=()
+  if tailnet_enabled; then
+    profiles+=(--profile tailnet)
+  fi
+  docker compose --project-directory "$ROOT" --env-file "$ENV_FILE" \
+    "${COMPOSE_FILES[@]}" "${profiles[@]}" "$@"
+}
 
 # --- helpers ---------------------------------------------------------------
 
@@ -81,6 +105,18 @@ ensure_env() {
       ' "$ENV_FILE" > "$ENV_FILE.tmp" && mv "$ENV_FILE.tmp" "$ENV_FILE"
       log "generated MANIFEST_ENCRYPTION_KEY in .env"
     fi
+  fi
+}
+
+# Seed homepage/config/services.yaml from the user-editable template on first
+# boot. When the tailnet-poller runs, it overwrites this file every poll —
+# but homepage needs *something* to load when the poller is disabled.
+ensure_homepage_seed() {
+  local cfg="$ROOT/homepage/config/services.yaml"
+  local tpl="$ROOT/homepage/services.template.yaml"
+  if [ ! -f "$cfg" ] && [ -f "$tpl" ]; then
+    cp "$tpl" "$cfg"
+    log "seeded homepage/config/services.yaml from template"
   fi
 }
 
@@ -190,29 +226,38 @@ cmd_up() {
   require_cmd docker
   ensure_submodules
   ensure_env
+  ensure_homepage_seed
 
-  log "starting manifest + postgres (docker compose)"
-  "${COMPOSE[@]}" up -d
+  log "starting manifest + postgres + homepage (docker compose)"
+  compose up -d
 
   proxy_start
 
-  local port proxy_port
+  local port proxy_port homepage_port tailnet_msg
   port="$(env_get PORT)"; port="${port:-2099}"
   proxy_port="$(env_get PROXY_PORT)"; proxy_port="${proxy_port:-9997}"
+  homepage_port="$(env_get HOMEPAGE_PORT)"; homepage_port="${homepage_port:-2100}"
+  if tailnet_enabled; then
+    tailnet_msg="enabled (tailnet-poller running)"
+  else
+    tailnet_msg="disabled (set TAILSCALE_API_KEY or OAuth client in .env to enable)"
+  fi
 
   cat <<EOF
 
   ai-gateway-dev-stack is up.
 
+    Homepage dashboard:  http://localhost:${homepage_port}
     Manifest dashboard:  http://localhost:${port}
     Provider proxy:      http://127.0.0.1:${proxy_port}
+    Tailnet discovery:   ${tailnet_msg}
     Logs:                ./stack logs
     Tear down:           ./stack down
     OpenCode snippet:    ./stack opencode
     Claude Code setup:   ./stack claudcode
 
-  First-run: open the dashboard, complete the /setup wizard, then add LLM
-  providers that point at the proxy, e.g.:
+  First-run: open the Manifest dashboard, complete the /setup wizard, then
+  add LLM providers that point at the proxy, e.g.:
 
     http://host.docker.internal:${proxy_port}/openai/v1
     http://host.docker.internal:${proxy_port}/kimi/v1
@@ -223,11 +268,25 @@ EOF
 cmd_down() {
   proxy_stop
   if command -v docker >/dev/null 2>&1; then
-    "${COMPOSE[@]}" down
+    compose down
   fi
 }
 
-cmd_restart() { cmd_down; cmd_up; }
+cmd_restart() {
+  # `./stack restart` with no args: full down + up (rebuilds host proxy too).
+  # `./stack restart <service> [<service>...]`: recreate those compose
+  # services. We use `up -d --force-recreate` instead of `restart` because
+  # `restart` only re-runs the existing container — it does NOT re-read
+  # labels, env vars, or volume specs from compose.yml or .env, so changes
+  # to e.g. homepage.* labels wouldn't take effect.
+  if [ "$#" -eq 0 ]; then
+    cmd_down; cmd_up
+  else
+    require_cmd docker
+    log "recreating compose services: $*"
+    compose up -d --force-recreate --no-deps "$@"
+  fi
+}
 
 cmd_status() {
   if proxy_running; then
@@ -235,7 +294,7 @@ cmd_status() {
   else
     log "provider-proxy: stopped"
   fi
-  "${COMPOSE[@]}" ps
+  compose ps
 }
 
 cmd_logs() {
@@ -245,14 +304,14 @@ cmd_logs() {
     local tail_pid=$!
     trap 'kill $tail_pid 2>/dev/null || true' EXIT INT TERM
   fi
-  "${COMPOSE[@]}" logs -f
+  compose logs -f
 }
 
 cmd_pull() {
   log "updating submodules"
   git submodule update --remote --merge
   log "pulling docker images"
-  "${COMPOSE[@]}" pull
+  compose pull
 }
 
 cmd_opencode() {
@@ -353,10 +412,12 @@ JSON
 EOF
 }
 
-case "${1:-up}" in
+subcmd="${1:-up}"
+shift || true
+case "$subcmd" in
   up)        cmd_up ;;
   down)      cmd_down ;;
-  restart)   cmd_restart ;;
+  restart)   cmd_restart "$@" ;;
   status|ps) cmd_status ;;
   logs)      cmd_logs ;;
   pull)      cmd_pull ;;
@@ -366,6 +427,6 @@ case "${1:-up}" in
     sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
     ;;
   *)
-    die "unknown command: $1 (try ./stack help)"
+    die "unknown command: $subcmd (try ./stack help)"
     ;;
 esac

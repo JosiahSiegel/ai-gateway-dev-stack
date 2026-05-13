@@ -1,0 +1,6 @@
+# Docker integration sources. Containers in this stack with `homepage.*`
+# labels are auto-discovered and rendered without manual services.yaml edits.
+# Full reference: https://gethomepage.dev/configs/docker/
+
+stack:
+  socket: /var/run/docker.sock
