@@ -5,6 +5,7 @@
 #   .\stack.ps1 up
 #   .\stack.ps1 down
 #   .\stack.ps1 opencode
+#   .\stack.ps1 claude
 
 param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Args)
 

@@ -39,6 +39,11 @@ services:
       HOMEPAGE_VAR_TS_DOMAIN: ${TAILSCALE_TS_DOMAIN:-}
     volumes:
       - ./homepage/config:/app/config
+      # services.yaml is generated (seeded from services.template.yaml; live-
+      # rewritten by tailnet-poller when enabled). Keep generated output out
+      # of homepage/config/ so that directory stays hand-edit-only. The file
+      # must exist on the host before container start; ./stack seeds it.
+      - ./homepage/.generated/services.yaml:/app/config/services.yaml
       # Read-only socket mount enables Docker label auto-discovery. Any
       # container in this stack with homepage.* labels appears automatically.
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -71,7 +76,9 @@ services:
     volumes:
       - ./homepage/tailnet-poller:/work:ro
       - ./homepage/services.template.yaml:/template/services.template.yaml:ro
-      - ./homepage/config:/output
+      # Writes services.yaml here; compose mounts the same file into the
+      # homepage container at /app/config/services.yaml.
+      - ./homepage/.generated:/output
     networks:
       - frontend
     profiles: ["tailnet"]

@@ -1,23 +1,21 @@
-# Source of truth for homepage services. Edited by hand.
+# Source of truth for homepage service tiles. Edited by hand.
 #
 # How this file is used:
-#   - If no Tailscale credentials are set: ./stack copies this file
-#     verbatim to homepage/config/services.yaml on first boot.
-#   - If credentials are set (API key or OAuth): the tailnet-poller reads
-#     this file, appends managed `- Tailnet:` and `- Tailscale Services:`
-#     groups built from the Tailscale API, and writes the result to
-#     homepage/config/services.yaml every TAILSCALE_POLL_INTERVAL_MS.
+#   - On first ./stack up: copied to homepage/.generated/services.yaml.
+#   - If TAILSCALE_API_KEY (or OAuth client) is set: the tailnet-poller
+#     reads this template, appends managed `- Tailnet:` and
+#     `- Tailscale Services:` groups built from the Tailscale API, and
+#     writes the result to homepage/.generated/services.yaml every
+#     TAILSCALE_POLL_INTERVAL_MS.
 #
-# Do NOT add `- Tailnet:` or `- Tailscale Services:` groups here yourself,
-# and do NOT edit anything below the TAILNET_POLLER_MANAGED marker line —
-# it gets overwritten on every poll. Add static entries above the marker
-# only.
+# compose.yml bind-mounts homepage/.generated/services.yaml into the
+# container at /app/config/services.yaml. Do not edit the generated file
+# directly — edit this template and run `./stack restart homepage`.
 #
-# Stack-internal services (Manifest, Homepage) are auto-discovered via
-# Docker labels (see compose.yml + homepage/config/docker.yaml). VIP
-# services like provider-proxy come from the Tailscale services API.
+# Do NOT add `- Tailnet:` or `- Tailscale Services:` groups here yourself;
+# the poller manages those. Stack-internal services (Manifest, Homepage)
+# are auto-discovered via Docker labels (see compose.yml).
 
-# Add static entries here for anything not auto-discovered. Stack-internal
-# services (Manifest, Homepage) come from Docker labels in compose.yml.
-# Tailnet machines and VIP services come from the tailnet-poller (below
-# the marker) — do not duplicate them here.
+# Add static entries here for anything not auto-discovered. Tailnet machines
+# and VIP services are appended by the poller (below the marker in the
+# generated file) — do not duplicate them here.
