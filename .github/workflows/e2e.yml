@@ -1,0 +1,120 @@
+name: E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly Monday 06:00 UTC — catch upstream Manifest image drift.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stack-up:
+    name: ./stack up + smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Show Docker + Compose versions
+        run: |
+          docker version
+          docker compose version
+
+      - name: Bring stack up
+        run: ./stack up
+
+      - name: Wait for Manifest to respond
+        run: |
+          for i in $(seq 1 60); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:2099/ || true)"
+            echo "attempt $i: manifest status=$code"
+            case "$code" in
+              200|301|302|303|307|308) exit 0 ;;
+            esac
+            sleep 2
+          done
+          echo "Manifest never became reachable on :2099" >&2
+          exit 1
+
+      - name: Wait for Homepage to respond
+        run: |
+          for i in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:2100/ || true)"
+            echo "attempt $i: homepage status=$code"
+            case "$code" in
+              200|301|302|303|307|308) exit 0 ;;
+            esac
+            sleep 2
+          done
+          echo "Homepage never became reachable on :2100" >&2
+          exit 1
+
+      - name: provider-proxy is listening on 127.0.0.1:9997
+        run: |
+          for i in $(seq 1 15); do
+            if (echo > /dev/tcp/127.0.0.1/9997) >/dev/null 2>&1; then
+              echo "provider-proxy is accepting connections"
+              exit 0
+            fi
+            echo "attempt $i: proxy not yet listening"
+            sleep 1
+          done
+          echo "provider-proxy never opened port 9997" >&2
+          exit 1
+        shell: bash
+
+      - name: provider-proxy answers HTTP requests
+        # Hitting an unknown path may legitimately return 404/502; we only
+        # require that the proxy itself responds (not a connection refused).
+        run: |
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9997/ || true)"
+          echo "proxy root status=$code"
+          test -n "$code" && test "$code" != "000"
+
+      - name: ./stack status
+        if: always()
+        run: ./stack status || true
+
+      - name: Dump container logs
+        if: failure()
+        run: |
+          echo "--- manifest ---"
+          docker compose \
+            --project-directory . \
+            --env-file .env \
+            -f manifest-local/docker-compose.yml \
+            -f compose.yml logs manifest || true
+          echo "--- postgres ---"
+          docker compose \
+            --project-directory . \
+            --env-file .env \
+            -f manifest-local/docker-compose.yml \
+            -f compose.yml logs postgres || true
+          echo "--- homepage ---"
+          docker compose \
+            --project-directory . \
+            --env-file .env \
+            -f manifest-local/docker-compose.yml \
+            -f compose.yml logs homepage || true
+          echo "--- provider-proxy ---"
+          cat .stack/proxy.log || true
+
+      - name: Tear stack down
+        if: always()
+        run: ./stack down || true

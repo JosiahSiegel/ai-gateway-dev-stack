@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shellcheck:
+    name: ShellCheck (stack script)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck on stack
+        uses: ludeeus/action-shellcheck@2.0.0
+        env:
+          SHELLCHECK_OPTS: -x -S warning
+        with:
+          scandir: .
+          additional_files: stack
+          ignore_paths: manifest-local provider-proxy homepage .stack
+
+  actionlint:
+    name: actionlint (workflow files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run actionlint
+        uses: raven-actions/actionlint@v2
+
+  yamllint:
+    name: yamllint (compose + homepage configs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run yamllint
+        uses: ibiqlik/action-yamllint@v3
+        with:
+          file_or_dir: compose.yml homepage/
+          config_data: |
+            extends: relaxed
+            rules:
+              line-length: disable
+              truthy:
+                allowed-values: ['true', 'false', 'on', 'off']
+                check-keys: false
+              comments:
+                min-spaces-from-content: 1
+
+  compose-config:
+    name: docker compose config (parent overlay validates)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Seed .env from example
+        run: cp .env.example .env
+
+      - name: Validate compose (no profile)
+        run: |
+          docker compose \
+            --project-directory . \
+            --env-file .env \
+            -f manifest-local/docker-compose.yml \
+            -f compose.yml \
+            config --quiet
+
+      - name: Validate compose (tailnet profile)
+        run: |
+          docker compose \
+            --project-directory . \
+            --env-file .env \
+            -f manifest-local/docker-compose.yml \
+            -f compose.yml \
+            --profile tailnet config --quiet
+
+  helper-output:
+    name: stack helper output is valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Seed .env from example
+        run: cp .env.example .env
+
+      - name: opencode snippet parses as JSON
+        run: |
+          ./stack opencode \
+            | sed '/^#/d; /^$/d' \
+            | python3 -c 'import json,sys; json.load(sys.stdin)'
+
+      - name: claudcode snippet contains both JSON blocks
+        run: |
+          out="$(./stack claudcode)"
+          echo "$out" | grep -q 'ANTHROPIC_BASE_URL'
+          echo "$out" | grep -q 'ANTHROPIC_AUTH_TOKEN'
+
+  proxy-syntax:
+    name: provider-proxy syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: node --check on proxy + poller
+        run: |
+          node --check provider-proxy/provider-proxy.js
+          node --check homepage/tailnet-poller/poll.js
