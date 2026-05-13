@@ -136,10 +136,35 @@ run, `./stack up` copies `proxy.routes.example.json` into place:
 ]
 ```
 
-Edit the file to add or change routes, then `./stack restart` to pick them up.
+Manifest then reaches the route at `http://host.docker.internal:9997/<pathPrefix>/v1`
+(e.g. `http://host.docker.internal:9997/kimi/v1`). The proxy strips the
+`pathPrefix` before forwarding, so `/kimi/v1/chat/completions` upstream becomes
+`https://api.kimi.com/v1/chat/completions`.
 
-To bypass the routes file entirely, set `PROXY_TARGET_HOST=<upstream>` in `.env`
-— the proxy will forward everything to that single host.
+**Supported fields per route:**
+
+| Field | Required | Default | What it does |
+|---|---|---|---|
+| `pathPrefix` | ✓ | — | URL prefix to match, e.g. `/kimi`. First match wins. |
+| `host` | ✓ | — | Upstream hostname. |
+| `protocol` | | `https` | `https` or `http`. |
+| `port` | | `443` / `80` | Upstream port. |
+| `headers` | | — | Object of headers merged on top of `PROXY_USER_AGENT` + `PROXY_EXTRA_HEADERS` for this route only. |
+
+**Edit → reload:**
+
+1. Edit `proxy.routes.json`.
+2. `./stack restart` (the script validates the JSON before starting the proxy
+   and refuses to start if it's malformed).
+
+**Single-target mode** — to bypass the routes file entirely, set
+`PROXY_TARGET_HOST=<upstream>` (and optionally `PROXY_TARGET_PROTOCOL` /
+`PROXY_TARGET_PORT`) in `.env`. The proxy forwards everything to that one
+host. Useful for debugging.
+
+For body-patching behavior (Gemini schema cleanup, content-encoding handling,
+etc.) and the full proxy contract, see
+[`provider-proxy/README.md`](provider-proxy/README.md).
 
 ## Homepage dashboard
 
