@@ -6,6 +6,8 @@ packages:
   - git
   - curl
   - ca-certificates
+  - gnupg
+  - nodejs
 
 users:
   - default

@@ -23,13 +23,14 @@ services:
   # The tailnet-poller surfaces it via the VIP services API ("Tailscale
   # Services" group), which has the correct tailnet URL. Labeling it
   # additionally would create a duplicate tile pointing at localhost.
+  manifest:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   homepage:
     image: ghcr.io/gethomepage/homepage:latest
     container_name: homepage
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     ports:
       - "${HOMEPAGE_PORT:-2100}:3000"
     environment:
