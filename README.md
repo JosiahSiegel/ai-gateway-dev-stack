@@ -61,8 +61,11 @@ credentials. This stack pre-wires the three pieces so the only thing you do is
 ```
 
 Manifest reaches the host proxy via `host.docker.internal:${PROXY_PORT}`. The
-proxy intentionally binds `127.0.0.1` only — it is not exposed to Docker
-networks or the LAN.
+proxy defaults to binding `127.0.0.1` (not exposed to Docker networks or the
+LAN). On Linux, where `host.docker.internal` resolves to the Docker bridge
+rather than the loopback, `PROXY_BIND=0.0.0.0` is required so the container
+can connect; the host firewall must then block the proxy port from outside
+the box. See the "Linux note" under cloud deployment.
 
 ## Quickstart
 
@@ -135,16 +138,32 @@ The same `cloud-init.yaml` and `bootstrap-vps.sh` work for all of them.
 
 ### Linux note
 
-On Linux hosts, add this to the `homepage` service in `compose.yml` so
-containers can resolve the host proxy the same way Docker Desktop does:
+Docker Desktop on macOS/Windows resolves `host.docker.internal` to the host
+loopback automatically. Linux Docker does not — there, two things differ:
 
-```yaml
-extra_hosts:
-  - "host.docker.internal:host-gateway"
-```
+1. **`extra_hosts`** maps the name to the docker-bridge gateway. The parent
+   `compose.yml` already sets this on the `manifest` service:
 
-Without it, Manifest may not be able to reach `http://host.docker.internal:9997/...`
-from inside the container.
+   ```yaml
+   extra_hosts:
+     - "host.docker.internal:host-gateway"
+   ```
+
+2. **`PROXY_BIND=0.0.0.0`** — the host proxy must accept connections from the
+   bridge interface, not just loopback. Set this in `.env`:
+
+   ```bash
+   PROXY_BIND=0.0.0.0
+   ```
+
+   `./stack` warns at startup whenever `PROXY_BIND` is non-loopback so it's
+   clear the host firewall is now the only barrier. Block `${PROXY_PORT}/tcp`
+   from public interfaces (e.g. `ufw deny ${PROXY_PORT}/tcp` followed by
+   `ufw allow in on docker0 to any port ${PROXY_PORT} proto tcp`).
+
+Without (1), name resolution fails inside the container. Without (2), the
+TCP connect is refused at the host. Both are needed on Linux; both are
+already correct on Docker Desktop.
 
 
 `./stack up` will, in order:
@@ -155,7 +174,8 @@ from inside the container.
 4. Seed `proxy.routes.json` from `proxy.routes.example.json` (`/openai` + `/kimi`).
 5. Seed `homepage/.generated/services.yaml` from the template.
 6. Bring up Manifest + Postgres + Homepage via Docker Compose.
-7. Start `provider-proxy` on the host (`127.0.0.1:9997`).
+7. Start `provider-proxy` on the host (binds `127.0.0.1:9997` by default; see
+   `PROXY_BIND` for the Linux Docker case).
 
 Then open:
 
@@ -169,8 +189,12 @@ from inside Docker:
 
 ```text
 http://host.docker.internal:9997/openai/v1
-http://host.docker.internal:9997/kimi/v1
+http://host.docker.internal:9997/kimi/coding/v1
 ```
+
+The path after the `pathPrefix` is forwarded upstream verbatim, so each provider's
+"real" path lives here: `/openai/v1` -> `api.openai.com/v1`,
+`/kimi/coding/v1` -> `api.kimi.com/coding/v1` (Kimi's coding-tuned endpoint).
 
 > **Windows users**: use `.\stack.ps1 <command>`. It forwards into WSL or Git Bash automatically.
 
@@ -211,10 +235,12 @@ run, `./stack up` copies `proxy.routes.example.json` into place:
 ]
 ```
 
-Manifest then reaches the route at `http://host.docker.internal:9997/<pathPrefix>/v1`
-(e.g. `http://host.docker.internal:9997/kimi/v1`). The proxy strips the
-`pathPrefix` before forwarding, so `/kimi/v1/chat/completions` upstream becomes
-`https://api.kimi.com/v1/chat/completions`.
+Manifest then reaches the route at `http://host.docker.internal:9997/<pathPrefix>/<upstream-path>`
+(e.g. `http://host.docker.internal:9997/kimi/coding/v1` for Kimi's coding endpoint,
+or `http://host.docker.internal:9997/openai/v1` for OpenAI's standard one).
+The proxy strips the `pathPrefix` before forwarding, so
+`/kimi/coding/v1/chat/completions` upstream becomes
+`https://api.kimi.com/coding/v1/chat/completions`.
 
 **Supported fields per route:**
 
@@ -304,7 +330,8 @@ in `.env` — they live in `proxy.routes.json`.
 | `BETTER_AUTH_SECRET` | _auto_ | Session signing secret (generated if blank) |
 | `MANIFEST_ENCRYPTION_KEY` | _auto_ | At-rest encryption for stored provider credentials |
 | `PROVIDER_TIMEOUT_MS` | `600000` | Manifest upstream timeout (raised for slow local models) |
-| `PROXY_PORT` | `9997` | Host proxy port (binds `127.0.0.1` only) |
+| `PROXY_PORT` | `9997` | Host proxy port |
+| `PROXY_BIND` | `127.0.0.1` | Host proxy bind address. Set to `0.0.0.0` on Linux when a Docker container must reach the proxy via `host.docker.internal`. |
 | `PROXY_TARGET_HOST` | _unset_ | Single-target alternative to `proxy.routes.json` |
 | `PROXY_USER_AGENT` | _set_ | Default UA injected on every upstream request |
 | `PROXY_EXTRA_HEADERS` | _unset_ | JSON object of extra global headers |
@@ -387,12 +414,13 @@ the homepage container won't see other containers. Static tiles go in
 `tailnet-poller` container. `docker logs tailnet-poller` shows API-call
 results.
 
-**Why does `provider-proxy` run on the host instead of in Docker?** It binds
-`127.0.0.1` only as a defense-in-depth measure. Containerizing it would either
-expose it on a Docker network the proxy was never designed to be reachable on,
-or require patching its bind address. Running it as a host process matches its
-documented usage and keeps the surface area minimal — Manifest reaches it via
-`host.docker.internal` from inside its container.
+**Why does `provider-proxy` run on the host instead of in Docker?** It
+defaults to binding `127.0.0.1` as defense-in-depth, and containerizing it
+would force a Docker-network exposure it wasn't designed for. Running it as a
+host process keeps the surface area minimal — Manifest reaches it via
+`host.docker.internal`. On Linux, `PROXY_BIND=0.0.0.0` widens the bind so
+that hop works (see the Linux note); the host firewall is then the only
+public barrier.
 
 **Can I run only Manifest, without the proxy?** Yes. Delete `proxy.routes.json`
 and leave `PROXY_TARGET_HOST` blank in `.env` and the proxy is skipped.

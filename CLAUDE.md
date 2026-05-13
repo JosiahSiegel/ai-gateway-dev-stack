@@ -126,6 +126,14 @@ the corresponding CI assertion in lockstep.
 - Manifest provider Base URLs must use `host.docker.internal`, e.g.
   `http://host.docker.internal:9997/openai/v1`. From inside the Manifest
   container, `localhost` is the container itself.
+- The proxy defaults to `PROXY_BIND=127.0.0.1`. On Linux Docker, the
+  `host.docker.internal:host-gateway` mapping routes container traffic via
+  the docker bridge — loopback bind refuses it. Set `PROXY_BIND=0.0.0.0` in
+  `.env` for that case and ensure the host firewall blocks `PROXY_PORT/tcp`
+  from public interfaces. `./stack` and `provider-proxy` both warn at
+  startup whenever `PROXY_BIND` is non-loopback. Docker Desktop on
+  macOS/Windows does not need this — `host.docker.internal` there hits
+  loopback already.
 - `./stack down` stops the host proxy first, then runs `compose down`. It
   never removes the `manifest_pgdata` volume.
 - For direct submodule work, `cd` into the submodule and read its own

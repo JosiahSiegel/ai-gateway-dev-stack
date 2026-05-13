@@ -230,13 +230,19 @@ proxy_start() {
     return 0
   fi
 
-  log "starting provider-proxy on 127.0.0.1:$(env_get PROXY_PORT || echo 9997)"
+  local proxy_bind
+  proxy_bind="$(env_get PROXY_BIND)"; proxy_bind="${proxy_bind:-127.0.0.1}"
+  log "starting provider-proxy on ${proxy_bind}:$(env_get PROXY_PORT || echo 9997)"
+  if [ "$proxy_bind" != "127.0.0.1" ]; then
+    warn "PROXY_BIND=${proxy_bind} — proxy is not loopback-only; the host firewall is the only barrier"
+  fi
 
   # Build env for the child process. Variable names match provider-proxy.js.
   # Assignment and export are split so shellcheck (SC2155) sees the env_get
   # exit status — the export itself can't mask it.
   (
     PROXY_PORT="$(env_get PROXY_PORT)"
+    PROXY_BIND="$proxy_bind"
     TARGET_PROTOCOL="$(env_get PROXY_TARGET_PROTOCOL)"
     TARGET_PORT="$(env_get PROXY_TARGET_PORT)"
     USER_AGENT="$(env_get PROXY_USER_AGENT)"
@@ -245,7 +251,7 @@ proxy_start() {
     DEBUG_BODY="$(env_get PROXY_DEBUG_BODY)"
     TARGET_HOST="$target_host"
     TARGETS="$targets"
-    export PROXY_PORT TARGET_HOST TARGET_PROTOCOL TARGET_PORT TARGETS \
+    export PROXY_PORT PROXY_BIND TARGET_HOST TARGET_PROTOCOL TARGET_PORT TARGETS \
       USER_AGENT EXTRA_HEADERS DEBUG_PROXY DEBUG_BODY
 
     nohup node "$ROOT/provider-proxy/provider-proxy.js" >>"$PROXY_LOG" 2>&1 &
@@ -286,9 +292,10 @@ cmd_up() {
 
   proxy_start
 
-  local port proxy_port homepage_port tailnet_msg
+  local port proxy_port proxy_bind homepage_port tailnet_msg
   port="$(env_get PORT)"; port="${port:-2099}"
   proxy_port="$(env_get PROXY_PORT)"; proxy_port="${proxy_port:-9997}"
+  proxy_bind="$(env_get PROXY_BIND)"; proxy_bind="${proxy_bind:-127.0.0.1}"
   homepage_port="$(env_get HOMEPAGE_PORT)"; homepage_port="${homepage_port:-2100}"
   if tailnet_enabled; then
     tailnet_msg="enabled (tailnet-poller running)"
@@ -302,7 +309,7 @@ cmd_up() {
 
     Homepage dashboard:  http://localhost:${homepage_port}
     Manifest dashboard:  http://localhost:${port}
-    Provider proxy:      http://127.0.0.1:${proxy_port}
+    Provider proxy:      http://${proxy_bind}:${proxy_port}
     Tailnet discovery:   ${tailnet_msg}
     Logs:                ./stack logs
     Tear down:           ./stack down
@@ -313,7 +320,7 @@ cmd_up() {
   add LLM providers that point at the proxy, e.g.:
 
     http://host.docker.internal:${proxy_port}/openai/v1
-    http://host.docker.internal:${proxy_port}/kimi/v1
+    http://host.docker.internal:${proxy_port}/kimi/coding/v1
 
 EOF
 }
@@ -408,7 +415,7 @@ EOF
       "name": "Proxy -> Kimi",
       "options": {
         "npm": "@ai-sdk/openai-compatible",
-        "baseURL": "http://127.0.0.1:${proxy_port}/kimi/v1"
+        "baseURL": "http://127.0.0.1:${proxy_port}/kimi/coding/v1"
       }
     }
   }
