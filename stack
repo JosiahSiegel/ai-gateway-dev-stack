@@ -83,10 +83,14 @@ ensure_env() {
   fi
 }
 
-# Read a var from .env (treats blank/unset the same).
+# Read a var from .env (treats blank/unset the same). Strips trailing CR so
+# Windows-edited .env files work in WSL/Git Bash.
 env_get() {
   local key="$1"
-  awk -F= -v k="$key" '$1==k {sub(/^[^=]*=/,""); print; exit}' "$ENV_FILE"
+  awk -F= -v k="$key" '
+    {sub(/\r$/,"")}
+    $1==k {sub(/^[^=]*=/,""); print; exit}
+  ' "$ENV_FILE"
 }
 
 # --- proxy lifecycle (host process, not Docker) ----------------------------
@@ -116,7 +120,7 @@ proxy_start() {
     return 0
   fi
 
-  log "starting provider-proxy on 127.0.0.1:$(env_get PROXY_PORT || echo 9999)"
+  log "starting provider-proxy on 127.0.0.1:$(env_get PROXY_PORT || echo 9997)"
 
   # Build env for the child process. Variable names match provider-proxy.js.
   (
@@ -170,7 +174,7 @@ cmd_up() {
 
   local port proxy_port
   port="$(env_get PORT)"; port="${port:-2099}"
-  proxy_port="$(env_get PROXY_PORT)"; proxy_port="${proxy_port:-9999}"
+  proxy_port="$(env_get PROXY_PORT)"; proxy_port="${proxy_port:-9997}"
 
   cat <<EOF
 
@@ -186,6 +190,7 @@ cmd_up() {
   providers that point at the proxy, e.g.:
 
     http://host.docker.internal:${proxy_port}/openai/v1
+    http://host.docker.internal:${proxy_port}/kimi/v1
 
 EOF
 }
@@ -227,10 +232,12 @@ cmd_pull() {
 
 cmd_opencode() {
   local proxy_port port
-  proxy_port="$(env_get PROXY_PORT)"; proxy_port="${proxy_port:-9999}"
+  proxy_port="$(env_get PROXY_PORT)"; proxy_port="${proxy_port:-9997}"
   port="$(env_get PORT)"; port="${port:-2099}"
   cat <<EOF
-# Drop into ~/.config/opencode/opencode.json (or this project's opencode.json):
+# Drop into ~/.config/opencode/opencode.json (or this project's opencode.json).
+# Manifest is the recommended entry point — it gives you logging, usage, and
+# rate limiting. The direct proxy entries are useful for debugging.
 
 {
   "\$schema": "https://opencode.ai/config.json",
@@ -244,10 +251,17 @@ cmd_opencode() {
       "models": { "auto": { "name": "Manifest Auto" } }
     },
     "proxy-openai": {
-      "name": "Proxy → OpenAI",
+      "name": "Proxy -> OpenAI",
       "options": {
         "npm": "@ai-sdk/openai-compatible",
         "baseURL": "http://127.0.0.1:${proxy_port}/openai/v1"
+      }
+    },
+    "proxy-kimi": {
+      "name": "Proxy -> Kimi",
+      "options": {
+        "npm": "@ai-sdk/openai-compatible",
+        "baseURL": "http://127.0.0.1:${proxy_port}/kimi/v1"
       }
     }
   }

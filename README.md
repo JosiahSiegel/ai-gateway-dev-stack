@@ -7,7 +7,7 @@ self-hosted gateway dashboard) and [provider-proxy](https://github.com/JosiahSie
 clone-and-go dev stack.
 
 ```
-OpenCode / Claude Code  ->  Manifest (Docker :2099)  ->  provider-proxy (host :9999)  ->  upstream LLMs
+OpenCode / Claude Code  ->  Manifest (Docker :2099)  ->  provider-proxy (host :9997)  ->  upstream LLMs
 ```
 
 ## Quickstart
@@ -24,37 +24,28 @@ That's it. `./stack up` will:
 2. Create `.env` from `.env.example` on first run.
 3. Auto-generate `BETTER_AUTH_SECRET` and `MANIFEST_ENCRYPTION_KEY`.
 4. Bring up the Manifest + Postgres containers via Docker Compose.
-5. Start `provider-proxy` on the host (`127.0.0.1:9999`) if you've configured
-   a target in `.env`. If no target is configured yet, it skips the proxy and
-   tells you so.
+5. Start `provider-proxy` on the host (`127.0.0.1:9997`) with sensible
+   defaults already wired (`/openai` and `/kimi` routes).
 
 Open the dashboard at <http://localhost:2099>, finish the `/setup` wizard to
 create your admin account, and you're live.
 
 ## Wire up the proxy
 
-Pick **one** of these in `.env`:
-
-**Single target** (everything goes to one upstream):
-
-```env
-PROXY_TARGET_HOST=app.manifest.build
-```
-
-**Multi-target** (recommended — route by path prefix):
-
-```env
-PROXY_TARGETS=[{"pathPrefix":"/openai","host":"api.openai.com"},{"pathPrefix":"/anthropic","host":"api.anthropic.com"}]
-```
-
-Then `./stack restart`.
+The default `.env.example` already wires the proxy with `/openai` and
+`/kimi` routes, so `./stack up` brings it up immediately. To add routes,
+edit `PROXY_TARGETS` in `.env` and run `./stack restart`.
 
 In the Manifest dashboard, add a provider whose **Base URL** points at the
 proxy from inside Docker:
 
 ```
-http://host.docker.internal:9999/openai/v1
+http://host.docker.internal:9997/openai/v1
+http://host.docker.internal:9997/kimi/v1
 ```
+
+To switch to a single-target setup instead, comment out `PROXY_TARGETS`
+and set `PROXY_TARGET_HOST=<upstream>`.
 
 ## Hook up OpenCode (WSL or anywhere)
 
@@ -74,7 +65,7 @@ Claude Code provider config — using:
 
 - `http://localhost:2099/v1` — go through Manifest (recommended; gives you
   rate limits, logging, and usage tracking).
-- `http://127.0.0.1:9999/<route>/v1` — go straight through the proxy (skips
+- `http://127.0.0.1:9997/<route>/v1` — go straight through the proxy (skips
   Manifest; useful for debugging upstream-specific issues).
 
 ## Commands
@@ -118,6 +109,13 @@ ai-gateway-dev-stack/
 Both submodules are independent repos — you can `cd` into either one and
 work on it directly. The parent repo only adds orchestration; it never
 modifies the children.
+
+### Compatibility with a previous standalone `manifest-local` install
+
+If you'd already been running `manifest-local` on its own, the parent stack
+reuses the same Docker Compose project name (`mnfst`) and the same Postgres
+volume name (`manifest_pgdata`). Switching to `./stack up` adopts the
+existing containers and database without migration.
 
 ## Requirements
 

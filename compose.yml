@@ -1,4 +1,4 @@
-# Parent-level override layered on top of manifest-local/docker-compose.yml.
+# Parent-level overlay layered on top of manifest-local/docker-compose.yml.
 #
 # Invoked by ./stack as:
 #   docker compose --project-directory . --env-file .env \
@@ -6,18 +6,15 @@
 #     -f compose.yml \
 #     up -d
 #
-# We don't redeclare services here — we extend manifest so it can reach the
-# host-side provider-proxy at host.docker.internal:${PROXY_PORT}. The proxy
-# itself runs on the host (it binds 127.0.0.1 by design) and is managed by
-# the ./stack script, not Docker.
-
-name: ai-gw
-
-services:
-  manifest:
-    environment:
-      # Convenience env vars so Manifest's dashboard / providers config can
-      # discover the proxy without hard-coding host.docker.internal everywhere.
-      - PROVIDER_PROXY_URL=http://host.docker.internal:${PROXY_PORT:-9999}
-      - PROVIDER_PROXY_HOST=host.docker.internal
-      - PROVIDER_PROXY_PORT=${PROXY_PORT:-9999}
+# Intentionally minimal: manifest-local already sets up everything (services,
+# networks, extra_hosts: host.docker.internal). The provider-proxy runs on
+# the host (it binds 127.0.0.1 by design), managed by the ./stack script.
+#
+# We deliberately do NOT override `name:` here — manifest-local pins
+# `name: mnfst`, and keeping it means any existing standalone install of
+# manifest-local picks up its same containers / volumes when running via
+# `./stack up`. No data migration needed.
+#
+# Add overrides here when you need to extend Manifest's compose config
+# without touching the manifest-local submodule (e.g. additional env vars,
+# extra services that should share the same docker network).
