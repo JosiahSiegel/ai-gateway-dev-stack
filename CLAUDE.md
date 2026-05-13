@@ -96,6 +96,70 @@ re-read labels, env vars, or volume specs. So edits to homepage labels in
 support both plus Git Bash on Windows. Keep new edits to `.env` using the
 same pattern.
 
+`env_set KEY VALUE` is the canonical helper — it replaces an existing
+`KEY=` (or commented `# KEY=`) line if present, appends otherwise, and
+collapses duplicates. Use it instead of hand-rolling another awk block.
+
+### `./stack expose` and `./stack unexpose`
+
+`expose` automates publishing this node's Manifest + Homepage via Tailscale
+Serve / Funnel. It calls `tailscale status --json` to discover the tailnet
+domain and node hostname, runs the appropriate `tailscale serve` /
+`tailscale funnel` commands, then writes the resulting URLs back into
+`.env` (`BETTER_AUTH_URL`, `HOMEPAGE_ALLOWED_HOSTS`, `HOMEPAGE_PUBLIC_URL`,
+`TAILSCALE_TS_DOMAIN`) and recreates the affected containers so they pick
+up the new origins.
+
+Constraints baked into the design:
+
+- **Funnel and Service `serve` cannot share a port on the same node.**
+  `tailscaled` only binds a given external port once. So `expose` lets you
+  pick *one* of `funnel` or `service` for Manifest — not both. The default
+  (`--manifest=funnel`) is the public path.
+- **Tailnet ACL prerequisites cannot be automated** — the `services:` and
+  `nodeAttrs.funnel` blocks live in the admin console. `expose` prints the
+  exact JSON to paste when a `serve` / `funnel` call fails with a
+  permission error. The README **Publishing via Tailscale** section has
+  the canonical block.
+- **Service names are hardcoded** to `svc:manifest` and `svc:homepage`.
+  If you rename them, update both `cmd_expose` and `cmd_unexpose` so
+  teardown still removes what setup created.
+- **`unexpose` does not revert `.env`.** Re-running `expose` on a new
+  host is the intended migration path; reverting `.env` would just
+  create churn.
+
+`./stack unexpose` is the symmetric teardown — needed before bringing the
+same Service up on a new node, since two nodes advertising one Service
+splits traffic.
+
+### `./stack autostart` and reboot survival
+
+Two independent reboot-survival mechanisms, easy to confuse:
+
+1. **Containers** survive via `restart: unless-stopped` set in the parent
+   `compose.yml` overlay. The `manifest-local` submodule intentionally
+   omits restart policies; we add them in the overlay so the standalone
+   submodule stays minimal and the parent stack gets autostart by
+   default. Don't push restart policies into the submodule — that breaks
+   the standalone-vs-parent separation.
+2. **Host `provider-proxy`** is a plain Node process, NOT managed by
+   Docker, so it needs systemd. `./stack autostart enable` writes
+   `/etc/systemd/system/ai-gateway-dev-stack.service` and runs `./stack
+   up` on boot. The unit is `Type=oneshot + RemainAfterExit=yes +
+   KillMode=mixed` so the nohup'd proxy survives in the unit's cgroup
+   after `ExecStart` returns. `ExecStop=./stack down` does clean
+   teardown.
+
+`autostart status` diffs the installed unit against the freshly-generated
+content; if they differ (repo moved, user changed, node path changed),
+it warns the user to re-run `enable`. Keep this drift check intact when
+editing `autostart_unit_content` — silent staleness was exactly the
+class of "tribal knowledge" we're trying to avoid.
+
+`bootstrap-vps.sh` and `cloud-init.yaml` both call `./stack autostart
+enable` after the initial `./stack up`, so a fresh VM is reboot-
+survivable out of the box.
+
 ### `env_get` strips `\r`
 
 `.env` may have CRLF line endings when edited on Windows. `env_get` does

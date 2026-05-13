@@ -331,6 +331,116 @@ OAuth client scopes (Tailscale admin → Settings → OAuth clients):
 Without those vars the poller is skipped and Homepage shows the static template
 + Docker-discovered tiles.
 
+## Publishing via Tailscale (Serve / Funnel)
+
+Once the stack is up on a tailnet-connected host (your VPS, dev box, whatever),
+publish Manifest + Homepage with one command:
+
+```bash
+./stack expose            # interactive
+./stack expose --yes      # apply recommended defaults (Funnel for Manifest, Service for Homepage)
+```
+
+It will:
+
+1. Detect the tailnet domain and this node's hostname via `tailscale status`.
+2. Ask whether to publish Manifest **publicly via Funnel** (default), as a
+   **tailnet-only Service**, or skip.
+3. Ask whether to publish Homepage as a **tailnet Service** (default) or skip.
+4. Run the appropriate `tailscale serve` / `tailscale funnel` commands.
+5. Update `.env` with `BETTER_AUTH_URL`, `HOMEPAGE_ALLOWED_HOSTS`,
+   `HOMEPAGE_PUBLIC_URL`, and `TAILSCALE_TS_DOMAIN`.
+6. Recreate the affected containers so they pick up the new origins.
+
+To take this node out of rotation (e.g. before bringing the same Service up
+on a different host — two nodes advertising the same Service splits traffic):
+
+```bash
+./stack unexpose
+```
+
+`unexpose` is idempotent and best-effort; it never errors if there's nothing
+to remove.
+
+### One-time tailnet ACL prerequisites
+
+Tailscale Services and Funnel are gated by your tailnet policy file. The
+script can't write the policy for you, but `./stack expose` prints the exact
+JSON to paste if a `serve` / `funnel` call comes back with a permission
+error. Once, in **admin → Access controls**, merge:
+
+```hujson
+"tagOwners": { "tag:vps": ["autogroup:admin"] },
+"services":  {
+  "svc:manifest": { "tags": ["tag:vps"] },
+  "svc:homepage": { "tags": ["tag:vps"] }
+},
+"nodeAttrs": [
+  { "target": ["tag:vps"], "attr": ["funnel"] }
+]
+```
+
+…then tag this node so it owns those Services and is allowed to use Funnel:
+
+```bash
+sudo tailscale up --ssh --advertise-tags=tag:vps
+```
+
+After that, `./stack expose` is the only command you need on subsequent
+hosts.
+
+### Notes and constraints
+
+- **Funnel ports are 443, 8443, or 10000** — Tailscale's hard limit. The
+  script defaults to 443.
+- **You can't run both Funnel and a Service `serve` on the same port on the
+  same node** — `tailscaled` only binds the port once. The default
+  (`--manifest=funnel`) gives you the public URL; pick `--manifest=service`
+  if you only want a tailnet hostname (e.g. `manifest.<your-tailnet>.ts.net`).
+- The `provider-proxy` is intentionally not exposed via Tailscale — it stays
+  loopback-bound on the host and is only reached by Manifest via the docker
+  bridge. See the **Linux note** above for the UFW recipe that locks it
+  down.
+
+## Surviving a host reboot
+
+The stack auto-recovers from a VPS reboot in two pieces:
+
+1. **Containers** — `manifest`, `postgres`, `homepage`, and the optional
+   `tailnet-poller` all carry `restart: unless-stopped`, so the Docker
+   daemon brings them back when it starts on boot.
+2. **Host `provider-proxy`** — a plain Node process; not managed by Docker.
+   It needs systemd to come back. Install the unit once:
+
+   ```bash
+   sudo ./stack autostart enable
+   ```
+
+   That writes `/etc/systemd/system/ai-gateway-dev-stack.service`, enables
+   it, and starts it. The unit `ExecStart`s `./stack up` (idempotent), so
+   on every boot the proxy comes back AND any container that somehow
+   missed Docker's restart policy is reconciled.
+
+   `bootstrap-vps.sh` and `cloud-init.yaml` both run `autostart enable`
+   automatically, so a fresh VM is reboot-survivable out of the box.
+
+   ```bash
+   sudo ./stack autostart status     # check if installed
+   sudo ./stack autostart disable    # remove the unit
+   ```
+
+   `autostart status` warns if the on-disk unit drifts from what `./stack`
+   would generate now (e.g. you moved the repo) — re-run `enable` to
+   refresh.
+
+   Tailscale Serve/Funnel state is persisted by `tailscaled` itself
+   (the `--bg` flag in `./stack expose`), so it survives reboot too with
+   no extra config.
+
+   On macOS, systemd doesn't exist; add `./stack up` to a launchd
+   `~/Library/LaunchAgents/*.plist` or your shell startup if you want
+   the same behavior.
+
 ## Commands
 
 | Command | What it does |
@@ -344,6 +454,9 @@ Without those vars the poller is skipped and Homepage shows the static template
 | `./stack pull` | Update submodules + Docker images |
 | `./stack opencode` | Print an OpenCode config snippet (JSON on stdout) |
 | `./stack claude` | Print Claude Code `.claude/*` settings (JSON on stdout) |
+| `./stack expose` | Configure Tailscale Serve/Funnel + `.env` for this node (interactive) |
+| `./stack unexpose` | Remove this node's Tailscale Serve/Funnel (idempotent) |
+| `./stack autostart enable` \| `disable` \| `status` | Install/remove a systemd unit so the stack comes back after a host reboot (Linux + systemd) |
 
 On Windows without WSL or Git Bash, use `.\stack.ps1 <command>` instead.
 

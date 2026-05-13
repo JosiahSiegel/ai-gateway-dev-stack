@@ -27,3 +27,5 @@ runcmd:
   - systemctl enable --now docker
   - su - ubuntu -c 'git clone --recurse-submodules https://github.com/JosiahSiegel/ai-gateway-dev-stack.git /home/ubuntu/ai-gateway-dev-stack'
   - su - ubuntu -c 'cd /home/ubuntu/ai-gateway-dev-stack && ./stack up'
+  # Install the systemd unit so the stack comes back on reboot.
+  - /home/ubuntu/ai-gateway-dev-stack/stack autostart enable
