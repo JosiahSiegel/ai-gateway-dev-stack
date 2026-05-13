@@ -139,7 +139,7 @@ The same `cloud-init.yaml` and `bootstrap-vps.sh` work for all of them.
 ### Linux note
 
 Docker Desktop on macOS/Windows resolves `host.docker.internal` to the host
-loopback automatically. Linux Docker does not — there, two things differ:
+loopback automatically. Linux Docker does not — there, three things differ:
 
 1. **`extra_hosts`** maps the name to the docker-bridge gateway. The parent
    `compose.yml` already sets this on the `manifest` service:
@@ -157,13 +157,43 @@ loopback automatically. Linux Docker does not — there, two things differ:
    ```
 
    `./stack` warns at startup whenever `PROXY_BIND` is non-loopback so it's
-   clear the host firewall is now the only barrier. Block `${PROXY_PORT}/tcp`
-   from public interfaces (e.g. `ufw deny ${PROXY_PORT}/tcp` followed by
-   `ufw allow in on docker0 to any port ${PROXY_PORT} proto tcp`).
+   clear the host firewall is now the only barrier.
+
+3. **Firewall** — block the proxy port from the public side, then allow it
+   from the compose network's subnet. The compose network is a *custom*
+   docker bridge (`br-<hash>`), **not** `docker0`, so `allow in on docker0`
+   does not match. Allow by subnet instead, and insert the rule **above**
+   the public deny — UFW evaluates rules top-to-bottom and the first match
+   wins:
+
+   ```bash
+   SUBNET=$(docker network inspect mnfst_frontend \
+     --format '{{(index .IPAM.Config 0).Subnet}}')
+
+   sudo ufw deny ${PROXY_PORT:-9997}/tcp
+   # If a stale rule already exists, delete it first so the new one lands
+   # above the deny:
+   sudo ufw delete allow from "$SUBNET" to any port ${PROXY_PORT:-9997} proto tcp 2>/dev/null
+
+   # Find the line number of the public deny and insert above it
+   sudo ufw status numbered | grep "${PROXY_PORT:-9997}/tcp"
+   sudo ufw insert <N> allow from "$SUBNET" to any port ${PROXY_PORT:-9997} \
+     proto tcp comment 'proxy: mnfst_frontend'
+   sudo ufw reload
+   ```
+
+   Verify the final order — subnet allow ABOVE the public deny:
+
+   ```
+   [N]   ${PROXY_PORT}/tcp   ALLOW IN  <subnet>   # proxy: mnfst_frontend
+   [N+1] ${PROXY_PORT}/tcp   DENY IN   Anywhere
+   ```
 
 Without (1), name resolution fails inside the container. Without (2), the
-TCP connect is refused at the host. Both are needed on Linux; both are
-already correct on Docker Desktop.
+host refuses the TCP connect on the bridge. Without (3), the SYN is dropped
+by UFW (manifests as `curl: (28) Connection timed out`, not "refused").
+All three are needed on Linux; all three are already correct on Docker
+Desktop.
 
 
 `./stack up` will, in order:

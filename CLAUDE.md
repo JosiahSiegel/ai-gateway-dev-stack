@@ -130,10 +130,16 @@ the corresponding CI assertion in lockstep.
   `host.docker.internal:host-gateway` mapping routes container traffic via
   the docker bridge — loopback bind refuses it. Set `PROXY_BIND=0.0.0.0` in
   `.env` for that case and ensure the host firewall blocks `PROXY_PORT/tcp`
-  from public interfaces. `./stack` and `provider-proxy` both warn at
-  startup whenever `PROXY_BIND` is non-loopback. Docker Desktop on
-  macOS/Windows does not need this — `host.docker.internal` there hits
-  loopback already.
+  publicly but allows it from the compose network's subnet. The compose
+  network (`mnfst_frontend`) is a *custom* bridge (`br-<hash>`), not
+  `docker0`, so `ufw allow in on docker0` does **not** match — allow by
+  subnet (`docker network inspect mnfst_frontend --format '{{(index
+  .IPAM.Config 0).Subnet}}'`) and **insert** the rule above the public
+  deny, since UFW evaluates top-to-bottom and first match wins. Symptom of
+  the rule landing below the deny is `curl: (28) Connection timed out`
+  from the container, not "Connection refused". See the README's Linux
+  note for the exact `ufw insert` recipe. Docker Desktop on macOS/Windows
+  does not need any of this.
 - `./stack down` stops the host proxy first, then runs `compose down`. It
   never removes the `manifest_pgdata` volume.
 - For direct submodule work, `cd` into the submodule and read its own
