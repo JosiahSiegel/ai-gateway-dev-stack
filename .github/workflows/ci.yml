@@ -116,6 +116,20 @@ jobs:
           ./stack claude 2>/dev/null \
             | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "settings" in d and "settings_local" in d, d.keys(); assert d["settings"]["env"]["ANTHROPIC_BASE_URL"]; assert d["settings_local"]["env"]["ANTHROPIC_AUTH_TOKEN"]'
 
+      - name: help lists every subcommand (catches drift)
+        run: |
+          out="$(./stack help)"
+          for sub in up down restart status logs pull opencode claude expose unexpose autostart; do
+            echo "$out" | grep -qE "^[[:space:]]*\./stack ${sub}([[:space:]]|$)" \
+              || { echo "missing in ./stack help: $sub"; echo "$out"; exit 1; }
+          done
+
+      - name: autostart status is safe to call without root or systemd
+        run: |
+          # On the CI runner systemctl exists but the unit doesn't — the
+          # command should print "not installed" and exit 0, never error.
+          ./stack autostart status
+
   routes-config:
     name: proxy.routes.example.json is valid JSON
     runs-on: ubuntu-latest

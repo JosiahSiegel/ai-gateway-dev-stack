@@ -23,6 +23,19 @@ services:
   # The tailnet-poller surfaces it via the VIP services API ("Tailscale
   # Services" group), which has the correct tailnet URL. Labeling it
   # additionally would create a duplicate tile pointing at localhost.
+  manifest:
+    # Survive host reboots and Docker daemon restarts. The submodule's
+    # docker-compose.yml intentionally omits this so the standalone
+    # manifest-local install stays minimal; we add it here at the parent
+    # so `./stack` users get autostart by default.
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  postgres:
+    # Same reasoning as manifest above — make Postgres come back on reboot
+    # without modifying the submodule.
+    restart: unless-stopped
 
   homepage:
     image: ghcr.io/gethomepage/homepage:latest
