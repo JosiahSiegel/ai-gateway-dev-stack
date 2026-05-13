@@ -183,16 +183,20 @@ proxy_start() {
   log "starting provider-proxy on 127.0.0.1:$(env_get PROXY_PORT || echo 9997)"
 
   # Build env for the child process. Variable names match provider-proxy.js.
+  # Assignment and export are split so shellcheck (SC2155) sees the env_get
+  # exit status — the export itself can't mask it.
   (
-    export PROXY_PORT="$(env_get PROXY_PORT)"
-    export TARGET_HOST="$target_host"
-    export TARGET_PROTOCOL="$(env_get PROXY_TARGET_PROTOCOL)"
-    export TARGET_PORT="$(env_get PROXY_TARGET_PORT)"
-    export TARGETS="$targets"
-    export USER_AGENT="$(env_get PROXY_USER_AGENT)"
-    export EXTRA_HEADERS="$(env_get PROXY_EXTRA_HEADERS)"
-    export DEBUG_PROXY="$(env_get PROXY_DEBUG)"
-    export DEBUG_BODY="$(env_get PROXY_DEBUG_BODY)"
+    PROXY_PORT="$(env_get PROXY_PORT)"
+    TARGET_PROTOCOL="$(env_get PROXY_TARGET_PROTOCOL)"
+    TARGET_PORT="$(env_get PROXY_TARGET_PORT)"
+    USER_AGENT="$(env_get PROXY_USER_AGENT)"
+    EXTRA_HEADERS="$(env_get PROXY_EXTRA_HEADERS)"
+    DEBUG_PROXY="$(env_get PROXY_DEBUG)"
+    DEBUG_BODY="$(env_get PROXY_DEBUG_BODY)"
+    TARGET_HOST="$target_host"
+    TARGETS="$targets"
+    export PROXY_PORT TARGET_HOST TARGET_PROTOCOL TARGET_PORT TARGETS \
+      USER_AGENT EXTRA_HEADERS DEBUG_PROXY DEBUG_BODY
 
     nohup node "$ROOT/provider-proxy/provider-proxy.js" >>"$PROXY_LOG" 2>&1 &
     echo $! >"$PROXY_PID_FILE"
