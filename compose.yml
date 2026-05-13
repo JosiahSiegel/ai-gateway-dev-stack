@@ -1,0 +1,23 @@
+# Parent-level override layered on top of manifest-local/docker-compose.yml.
+#
+# Invoked by ./stack as:
+#   docker compose --project-directory . --env-file .env \
+#     -f manifest-local/docker-compose.yml \
+#     -f compose.yml \
+#     up -d
+#
+# We don't redeclare services here — we extend manifest so it can reach the
+# host-side provider-proxy at host.docker.internal:${PROXY_PORT}. The proxy
+# itself runs on the host (it binds 127.0.0.1 by design) and is managed by
+# the ./stack script, not Docker.
+
+name: ai-gw
+
+services:
+  manifest:
+    environment:
+      # Convenience env vars so Manifest's dashboard / providers config can
+      # discover the proxy without hard-coding host.docker.internal everywhere.
+      - PROVIDER_PROXY_URL=http://host.docker.internal:${PROXY_PORT:-9999}
+      - PROVIDER_PROXY_HOST=host.docker.internal
+      - PROVIDER_PROXY_PORT=${PROXY_PORT:-9999}
