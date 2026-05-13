@@ -184,17 +184,15 @@ proxy_start() {
 
   # Build env for the child process. Variable names match provider-proxy.js.
   (
-    set -a
-    PROXY_PORT="$(env_get PROXY_PORT)"
-    TARGET_HOST="$target_host"
-    TARGET_PROTOCOL="$(env_get PROXY_TARGET_PROTOCOL)"
-    TARGET_PORT="$(env_get PROXY_TARGET_PORT)"
-    TARGETS="$targets"
-    USER_AGENT="$(env_get PROXY_USER_AGENT)"
-    EXTRA_HEADERS="$(env_get PROXY_EXTRA_HEADERS)"
-    DEBUG_PROXY="$(env_get PROXY_DEBUG)"
-    DEBUG_BODY="$(env_get PROXY_DEBUG_BODY)"
-    set +a
+    export PROXY_PORT="$(env_get PROXY_PORT)"
+    export TARGET_HOST="$target_host"
+    export TARGET_PROTOCOL="$(env_get PROXY_TARGET_PROTOCOL)"
+    export TARGET_PORT="$(env_get PROXY_TARGET_PORT)"
+    export TARGETS="$targets"
+    export USER_AGENT="$(env_get PROXY_USER_AGENT)"
+    export EXTRA_HEADERS="$(env_get PROXY_EXTRA_HEADERS)"
+    export DEBUG_PROXY="$(env_get PROXY_DEBUG)"
+    export DEBUG_BODY="$(env_get PROXY_DEBUG_BODY)"
 
     nohup node "$ROOT/provider-proxy/provider-proxy.js" >>"$PROXY_LOG" 2>&1 &
     echo $! >"$PROXY_PID_FILE"

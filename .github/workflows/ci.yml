@@ -64,7 +64,12 @@ jobs:
           submodules: recursive
 
       - name: Seed .env from example
-        run: cp .env.example .env
+        run: |
+          cp .env.example .env
+          # ./stack up auto-generates these on first boot; for static checks
+          # we just need any non-empty value so compose interpolation succeeds.
+          sed -i 's/^BETTER_AUTH_SECRET=$/BETTER_AUTH_SECRET=ci-placeholder-secret/' .env
+          sed -i 's/^MANIFEST_ENCRYPTION_KEY=$/MANIFEST_ENCRYPTION_KEY=ci-placeholder-key/' .env
 
       - name: Validate compose (no profile)
         run: |
@@ -93,7 +98,12 @@ jobs:
           submodules: recursive
 
       - name: Seed .env from example
-        run: cp .env.example .env
+        run: |
+          cp .env.example .env
+          # ./stack up auto-generates these on first boot; for static checks
+          # we just need any non-empty value so compose interpolation succeeds.
+          sed -i 's/^BETTER_AUTH_SECRET=$/BETTER_AUTH_SECRET=ci-placeholder-secret/' .env
+          sed -i 's/^MANIFEST_ENCRYPTION_KEY=$/MANIFEST_ENCRYPTION_KEY=ci-placeholder-key/' .env
 
       - name: opencode snippet parses as JSON
         run: |
