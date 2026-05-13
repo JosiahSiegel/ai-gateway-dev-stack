@@ -8,6 +8,7 @@
 #   ./stack logs      Tail logs from manifest + proxy
 #   ./stack pull      Pull latest submodules + Docker images
 #   ./stack opencode  Print an opencode.json snippet pre-wired to this stack
+#   ./stack claudcode Print Claude Code settings instructions for this stack
 #
 # Assumptions: Docker (or Docker Desktop with WSL integration), Node.js, and
 # Bash. Works in WSL, macOS, Linux, and Git Bash on Windows.
@@ -185,6 +186,7 @@ cmd_up() {
     Logs:                ./stack logs
     Tear down:           ./stack down
     OpenCode snippet:    ./stack opencode
+    Claude Code setup:   ./stack claudcode
 
   First-run: open the dashboard, complete the /setup wizard, then add LLM
   providers that point at the proxy, e.g.:
@@ -266,9 +268,71 @@ cmd_opencode() {
     }
   }
 }
+EOF
+}
 
-# Claude Code uses the same baseURL convention via ANTHROPIC_BASE_URL or its
-# provider config — point it at the proxy or Manifest the same way.
+cmd_claudcode() {
+  local base_url model
+  base_url="$(env_get CLAUDE_CODE_MANIFEST_URL)"
+  if [ -z "$base_url" ]; then
+    base_url="$(env_get BETTER_AUTH_URL)"
+  fi
+  if [ -z "$base_url" ] || [[ "$base_url" == http://localhost:* ]]; then
+    local port
+    port="$(env_get PORT)"; port="${port:-2099}"
+    base_url="http://localhost:${port}/"
+  fi
+  case "$base_url" in */) ;; *) base_url="${base_url}/" ;; esac
+
+  model="$(env_get CLAUDE_CODE_MODEL)"
+  model="${model:-manifest/auto}"
+
+  cat <<EOF
+# Claude Code -> Manifest setup
+#
+# This mirrors the pattern in manifest-local/.claude/settings.json:
+#   ANTHROPIC_BASE_URL points at Manifest
+#   ANTHROPIC_CUSTOM_MODEL_OPTION selects Manifest's routed model
+#
+# 1) Create a project settings file:
+#
+#   mkdir -p .claude
+#   cat > .claude/settings.json <<'JSON'
+{
+  "\$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "ANTHROPIC_BASE_URL": "${base_url}",
+    "ENABLE_TOOL_SEARCH": "true",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION": "${model}",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "Manifest Auto",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Routed through Manifest",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "75",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32000",
+    "MAX_THINKING_TOKENS": "10000"
+  },
+  "effortLevel": "medium"
+}
+JSON
+#
+# 2) Add your Manifest API token locally only. Do NOT commit this file:
+#
+#   cat > .claude/settings.local.json <<'JSON'
+{
+  "\$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "mnfst_REPLACE_WITH_YOUR_MANIFEST_TOKEN"
+  }
+}
+JSON
+#
+# 3) Ensure .claude/settings.local.json is ignored, then restart Claude Code.
+#
+# If using the Tailscale/public Manifest URL instead of localhost, set this in .env:
+#   CLAUDE_CODE_MANIFEST_URL=https://your-manifest-host/
+#
+# The token comes from Manifest. In your manual setup this lived in
+# manifest-local/.claude/settings.local.json and was intentionally local-only.
 EOF
 }
 
@@ -280,6 +344,7 @@ case "${1:-up}" in
   logs)      cmd_logs ;;
   pull)      cmd_pull ;;
   opencode)  cmd_opencode ;;
+  claudcode|claudecode|claude-code|claude_code) cmd_claudcode ;;
   -h|--help|help)
     sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
     ;;

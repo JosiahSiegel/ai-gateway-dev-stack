@@ -59,14 +59,13 @@ restart OpenCode, and you're talking to Manifest through this stack.
 
 ## Hook up Claude Code
 
-Point Claude Code at Manifest the same way you'd point it at any
-OpenAI-compatible gateway — typically via `ANTHROPIC_BASE_URL` or your
-Claude Code provider config — using:
+```bash
+./stack claudcode
+```
 
-- `http://localhost:2099/v1` — go through Manifest (recommended; gives you
-  rate limits, logging, and usage tracking).
-- `http://127.0.0.1:9997/<route>/v1` — go straight through the proxy (skips
-  Manifest; useful for debugging upstream-specific issues).
+Prints the project `.claude/settings.json` and `.claude/settings.local.json`
+pattern for routing Claude Code through Manifest. The token stays local and
+should never be committed.
 
 ## Commands
 
@@ -79,6 +78,7 @@ Claude Code provider config — using:
 | `./stack logs` | Tail Manifest, Postgres, and proxy logs |
 | `./stack pull` | Update submodules + Docker images |
 | `./stack opencode` | Print an OpenCode config snippet |
+| `./stack claudcode` | Print Claude Code settings instructions |
 
 On Windows without WSL or Git Bash, use `.\stack.ps1 <command>` instead —
 it forwards into WSL if available.
