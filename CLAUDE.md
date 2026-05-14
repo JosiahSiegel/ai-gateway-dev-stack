@@ -1,9 +1,15 @@
 # CLAUDE.md
 
 Guidance for Claude Code (and other AI coding agents) working in this repo.
-For the human-facing overview, commands, and configuration tables, see
-[README.md](README.md). This file only covers things that are easy to get
-wrong when editing code here.
+For the human-facing overview, quickstart, commands, and configuration table,
+see [README.md](README.md). Operational runbooks live in `docs/`:
+
+- `docs/cloud-deployment.md` — VPS setup, Linux Docker networking, UFW, and autostart.
+- `docs/tailscale.md` — Serve/Funnel policy, Service recovery, WSL-hosted services, and SSH/tag tradeoffs.
+- `docs/proxy-routes.md` — route file fields, reload flow, and single-target mode.
+- `docs/troubleshooting.md` — common failure modes and fixes.
+
+This file only covers things that are easy to get wrong when editing code here.
 
 ## Repository shape
 
@@ -124,11 +130,24 @@ Constraints baked into the design:
 - **Tailnet ACL prerequisites cannot be automated** — the `services:` and
   `nodeAttrs.funnel` blocks live in the admin console. `expose` prints the
   exact JSON to paste when a `serve` / `funnel` call fails with a
-  permission error. The README **Publishing via Tailscale** section has
-  the canonical block.
+  permission error. `docs/tailscale.md` has the canonical block and
+  recovery runbook.
 - **Service names are hardcoded** to `svc:manifest` and `svc:homepage`.
   If you rename them, update both `cmd_expose` and `cmd_unexpose` so
   teardown still removes what setup created.
+- **Serve/Funnel state lives in `tailscaled`, not Docker.** A `tailscale up
+  --reset`, tag change, or `./stack unexpose` can remove Service
+  advertisements while containers keep running. Diagnose with `tailscale
+  serve status`; restore this stack with `./stack expose --manifest=funnel
+  --homepage=service`. For external services such as `svc:cloudcli` or
+  `svc:opencode`, re-run `tailscale serve --service=...` on the host that
+  runs the app.
+- **Tagged service hosts lose user identity for SSH ACL matching.** A
+  Windows/WSL dev box advertising `svc:cloudcli` or `svc:opencode` needs a
+  tag-based identity (for example `tag:cloudcli-host`), but then
+  `autogroup:admin` SSH rules no longer match traffic from that device. Add
+  an explicit tag-to-`tag:vps` SSH rule if the service host must SSH to the
+  VPS.
 - **`unexpose` does not revert `.env`.** Re-running `expose` on a new
   host is the intended migration path; reverting `.env` would just
   create churn.
@@ -206,9 +225,9 @@ the corresponding CI assertion in lockstep.
   .IPAM.Config 0).Subnet}}'`) and **insert** the rule above the public
   deny, since UFW evaluates top-to-bottom and first match wins. Symptom of
   the rule landing below the deny is `curl: (28) Connection timed out`
-  from the container, not "Connection refused". See the README's Linux
-  note for the exact `ufw insert` recipe. Docker Desktop on macOS/Windows
-  does not need any of this.
+  from the container, not "Connection refused". See
+  `docs/cloud-deployment.md` for the exact `ufw insert` recipe. Docker
+  Desktop on macOS/Windows does not need any of this.
 - `./stack down` stops the host proxy first, then runs `compose down`. It
   never removes the `manifest_pgdata` volume.
 - For direct submodule work, `cd` into the submodule and read its own

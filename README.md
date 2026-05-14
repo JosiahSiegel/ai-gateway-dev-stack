@@ -24,9 +24,11 @@ single clone-and-go dev environment.
 - [Why](#why)
 - [Architecture](#architecture)
 - [Quickstart](#quickstart)
+- [Cheap cloud deployment](#cheap-cloud-deployment)
 - [Hook up clients](#hook-up-clients)
 - [Configuring proxy routes](#configuring-proxy-routes)
 - [Homepage dashboard](#homepage-dashboard)
+- [Operational docs](#operational-docs)
 - [Commands](#commands)
 - [Environment variables](#environment-variables)
 - [Updating](#updating)
@@ -77,18 +79,8 @@ cd ai-gateway-dev-stack
 
 ## Cheap cloud deployment
 
-The cheapest practical way to run this stack in the cloud is a single small VPS
-with Docker Compose. A 2 vCPU / 4 GB RAM instance is enough for the stack plus
-Postgres, and it keeps the only persistent state (`manifest_pgdata`) on one disk.
-
-Recommended setup:
-
-- Hetzner CX22 or similar small VPS
-- Ubuntu 24.04
-- Docker + Docker Compose plugin
-- Tailscale for private access instead of public ingress
-
-On the VM:
+Run it on a small Ubuntu VPS with Docker Compose, keep app ports closed, and use
+Tailscale for access:
 
 ```bash
 git clone --recurse-submodules https://github.com/JosiahSiegel/ai-gateway-dev-stack.git
@@ -96,105 +88,11 @@ cd ai-gateway-dev-stack
 ./stack up
 ```
 
-For a fresh VM, two equivalent one-shot bootstraps are included — both install
-Docker, clone the repo, and run `./stack up`:
+For fresh VMs, use `cloud-init.yaml` or `bootstrap-vps.sh`; both install Docker,
+clone the repo, run `./stack up`, and enable autostart.
 
-- `cloud-init.yaml` — paste into your provider's user-data field.
-- `bootstrap-vps.sh` — `curl -fsSL .../bootstrap-vps.sh | sudo bash` on the VM.
-
-If you want private access over tailnet, set the Tailscale env vars in `.env`
-and run `./stack up --profile tailnet`.
-
-### Hetzner specifics
-
-1. Sign in at <https://console.hetzner.com/> → **Add Server**.
-2. Image: **Ubuntu 24.04**. Type: **CX22** (x86) or **CAX11** (ARM, cheaper).
-3. Paste `cloud-init.yaml` into the **Cloud config** field.
-4. Create a **Firewall** that allows only **22/tcp** inbound. Do not expose
-   ports `2099`, `2100`, or `9997` to the public internet.
-5. SSH in once it boots, edit `.env`, then either `./stack restart` or, with
-   Tailscale creds set, `./stack restart --profile tailnet`.
-
-To make the VM itself a tailnet node (recommended — lets you drop public SSH):
-
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up --ssh
-```
-
-### Other cheap VPS options
-
-If Hetzner asks for ID verification or you want a different provider, these are
-reasonable fallback choices:
-
-- **Contabo VPS-S** — cheapest raw value; 4 vCPU / 8 GB RAM / 200 GB SSD. Card-only,
-  cloud-init supported. Tradeoff: noisier storage and slower provisioning.
-- **Oracle Cloud Always Free** — $0 if you can get capacity. Tradeoff: capacity
-  is inconsistent and accounts can be reaped if idle.
-- **DigitalOcean Basic** — simplest setup, but more expensive.
-- **Vultr** — similar to DigitalOcean in price and experience.
-
-The same `cloud-init.yaml` and `bootstrap-vps.sh` work for all of them.
-
-### Linux note
-
-Docker Desktop on macOS/Windows resolves `host.docker.internal` to the host
-loopback automatically. Linux Docker does not — there, three things differ:
-
-1. **`extra_hosts`** maps the name to the docker-bridge gateway. The parent
-   `compose.yml` already sets this on the `manifest` service:
-
-   ```yaml
-   extra_hosts:
-     - "host.docker.internal:host-gateway"
-   ```
-
-2. **`PROXY_BIND=0.0.0.0`** — the host proxy must accept connections from the
-   bridge interface, not just loopback. Set this in `.env`:
-
-   ```bash
-   PROXY_BIND=0.0.0.0
-   ```
-
-   `./stack` warns at startup whenever `PROXY_BIND` is non-loopback so it's
-   clear the host firewall is now the only barrier.
-
-3. **Firewall** — block the proxy port from the public side, then allow it
-   from the compose network's subnet. The compose network is a *custom*
-   docker bridge (`br-<hash>`), **not** `docker0`, so `allow in on docker0`
-   does not match. Allow by subnet instead, and insert the rule **above**
-   the public deny — UFW evaluates rules top-to-bottom and the first match
-   wins:
-
-   ```bash
-   SUBNET=$(docker network inspect mnfst_frontend \
-     --format '{{(index .IPAM.Config 0).Subnet}}')
-
-   sudo ufw deny ${PROXY_PORT:-9997}/tcp
-   # If a stale rule already exists, delete it first so the new one lands
-   # above the deny:
-   sudo ufw delete allow from "$SUBNET" to any port ${PROXY_PORT:-9997} proto tcp 2>/dev/null
-
-   # Find the line number of the public deny and insert above it
-   sudo ufw status numbered | grep "${PROXY_PORT:-9997}/tcp"
-   sudo ufw insert <N> allow from "$SUBNET" to any port ${PROXY_PORT:-9997} \
-     proto tcp comment 'proxy: mnfst_frontend'
-   sudo ufw reload
-   ```
-
-   Verify the final order — subnet allow ABOVE the public deny:
-
-   ```
-   [N]   ${PROXY_PORT}/tcp   ALLOW IN  <subnet>   # proxy: mnfst_frontend
-   [N+1] ${PROXY_PORT}/tcp   DENY IN   Anywhere
-   ```
-
-Without (1), name resolution fails inside the container. Without (2), the
-host refuses the TCP connect on the bridge. Without (3), the SYN is dropped
-by UFW (manifests as `curl: (28) Connection timed out`, not "refused").
-All three are needed on Linux; all three are already correct on Docker
-Desktop.
-
+Cloud provider notes, Linux Docker firewall details, and reboot-survival behavior
+live in [`docs/cloud-deployment.md`](docs/cloud-deployment.md).
 
 `./stack up` will, in order:
 
@@ -256,46 +154,20 @@ stay local.
 ## Configuring proxy routes
 
 Routes live in **`proxy.routes.json`** at the repo root (gitignored). On first
-run, `./stack up` copies `proxy.routes.example.json` into place:
+run, `./stack up` copies `proxy.routes.example.json` into place.
 
-```json
-[
-  { "pathPrefix": "/kimi",   "host": "api.kimi.com", "headers": { "x-app": "cli" } },
-  { "pathPrefix": "/openai", "host": "api.openai.com" }
-]
+Manifest reaches routes through the host proxy:
+
+```text
+http://host.docker.internal:9997/openai/v1
+http://host.docker.internal:9997/kimi/coding/v1
 ```
 
-Manifest then reaches the route at `http://host.docker.internal:9997/<pathPrefix>/<upstream-path>`
-(e.g. `http://host.docker.internal:9997/kimi/coding/v1` for Kimi's coding endpoint,
-or `http://host.docker.internal:9997/openai/v1` for OpenAI's standard one).
-The proxy strips the `pathPrefix` before forwarding, so
-`/kimi/coding/v1/chat/completions` upstream becomes
-`https://api.kimi.com/coding/v1/chat/completions`.
+Edit `proxy.routes.json`, then run `./stack restart`. The script validates the
+JSON before starting the proxy.
 
-**Supported fields per route:**
-
-| Field | Required | Default | What it does |
-|---|---|---|---|
-| `pathPrefix` | ✓ | — | URL prefix to match, e.g. `/kimi`. First match wins. |
-| `host` | ✓ | — | Upstream hostname. |
-| `protocol` | | `https` | `https` or `http`. |
-| `port` | | `443` / `80` | Upstream port. |
-| `headers` | | — | Object of headers merged on top of `PROXY_USER_AGENT` + `PROXY_EXTRA_HEADERS` for this route only. |
-
-**Edit → reload:**
-
-1. Edit `proxy.routes.json`.
-2. `./stack restart` (the script validates the JSON before starting the proxy
-   and refuses to start if it's malformed).
-
-**Single-target mode** — to bypass the routes file entirely, set
-`PROXY_TARGET_HOST=<upstream>` (and optionally `PROXY_TARGET_PROTOCOL` /
-`PROXY_TARGET_PORT`) in `.env`. The proxy forwards everything to that one
-host. Useful for debugging.
-
-For body-patching behavior (Gemini schema cleanup, content-encoding handling,
-etc.) and the full proxy contract, see
-[`provider-proxy/README.md`](provider-proxy/README.md).
+For route fields, single-target mode, and proxy behavior, see
+[`docs/proxy-routes.md`](docs/proxy-routes.md).
 
 ## Homepage dashboard
 
@@ -340,113 +212,38 @@ Without those vars the poller is skipped and Homepage shows the static template
 
 ## Publishing via Tailscale (Serve / Funnel)
 
-Once the stack is up on a tailnet-connected host (your VPS, dev box, whatever),
-publish Manifest + Homepage with one command:
+Once the stack is up on a tailnet-connected host, publish Manifest + Homepage
+with one command:
 
 ```bash
 ./stack expose            # interactive
-./stack expose --yes      # apply recommended defaults (Funnel for Manifest, Service for Homepage)
+./stack expose --yes      # defaults: Manifest via Funnel, Homepage as a Service
 ```
 
-It will:
+Recommended defaults:
 
-1. Detect the tailnet domain and this node's hostname via `tailscale status`.
-2. Ask whether to publish Manifest **publicly via Funnel** (default), as a
-   **tailnet-only Service**, or skip.
-3. Ask whether to publish Homepage as a **tailnet Service** (default) or skip.
-4. Run the appropriate `tailscale serve` / `tailscale funnel` commands.
-5. Update `.env` with `BETTER_AUTH_URL`, `HOMEPAGE_ALLOWED_HOSTS`,
-   `HOMEPAGE_PUBLIC_URL`, `TAILSCALE_TS_DOMAIN`, and `TAILSCALE_HOSTNAME`.
-6. Recreate the affected containers so they pick up the new origins.
+- Manifest: public Tailscale Funnel URL.
+- Homepage: tailnet-only Tailscale Service URL.
 
-To take this node out of rotation (e.g. before bringing the same Service up
-on a different host — two nodes advertising the same Service splits traffic):
+If `./stack expose` reports a tailnet policy error, paste the ACL snippet it
+prints into Tailscale admin → Access controls, then rerun the command.
+
+Useful follow-ups:
 
 ```bash
-./stack unexpose
+tailscale serve status    # see what this host is advertising
+./stack unexpose          # remove this node's Serve/Funnel config
 ```
 
-`unexpose` is idempotent and best-effort; it never errors if there's nothing
-to remove.
+For policy prerequisites, missing Service recovery, WSL-hosted services, and
+SSH/tag tradeoffs, see [`docs/tailscale.md`](docs/tailscale.md).
 
-### One-time tailnet ACL prerequisites
+## Operational docs
 
-Tailscale Services and Funnel are gated by your tailnet policy file. The
-script can't write the policy for you, but `./stack expose` prints the exact
-JSON to paste if a `serve` / `funnel` call comes back with a permission
-error. Once, in **admin → Access controls**, merge:
-
-```hujson
-"tagOwners": { "tag:vps": ["autogroup:admin"] },
-"services":  {
-  "svc:manifest": { "tags": ["tag:vps"] },
-  "svc:homepage": { "tags": ["tag:vps"] }
-},
-"nodeAttrs": [
-  { "target": ["tag:vps"], "attr": ["funnel"] }
-]
-```
-
-…then tag this node so it owns those Services and is allowed to use Funnel:
-
-```bash
-sudo tailscale up --ssh --advertise-tags=tag:vps
-```
-
-After that, `./stack expose` is the only command you need on subsequent
-hosts.
-
-### Notes and constraints
-
-- **Funnel ports are 443, 8443, or 10000** — Tailscale's hard limit. The
-  script defaults to 443.
-- **You can't run both Funnel and a Service `serve` on the same port on the
-  same node** — `tailscaled` only binds the port once. The default
-  (`--manifest=funnel`) gives you the public URL; pick `--manifest=service`
-  if you only want a tailnet hostname (e.g. `manifest.<your-tailnet>.ts.net`).
-- The `provider-proxy` is intentionally not exposed via Tailscale — it stays
-  loopback-bound on the host and is only reached by Manifest via the docker
-  bridge. See the **Linux note** above for the UFW recipe that locks it
-  down.
-
-## Surviving a host reboot
-
-The stack auto-recovers from a VPS reboot in two pieces:
-
-1. **Containers** — `manifest`, `postgres`, `homepage`, and the optional
-   `tailnet-poller` all carry `restart: unless-stopped`, so the Docker
-   daemon brings them back when it starts on boot.
-2. **Host `provider-proxy`** — a plain Node process; not managed by Docker.
-   It needs systemd to come back. Install the unit once:
-
-   ```bash
-   sudo ./stack autostart enable
-   ```
-
-   That writes `/etc/systemd/system/ai-gateway-dev-stack.service`, enables
-   it, and starts it. The unit `ExecStart`s `./stack up` (idempotent), so
-   on every boot the proxy comes back AND any container that somehow
-   missed Docker's restart policy is reconciled.
-
-   `bootstrap-vps.sh` and `cloud-init.yaml` both run `autostart enable`
-   automatically, so a fresh VM is reboot-survivable out of the box.
-
-   ```bash
-   sudo ./stack autostart status     # check if installed
-   sudo ./stack autostart disable    # remove the unit
-   ```
-
-   `autostart status` warns if the on-disk unit drifts from what `./stack`
-   would generate now (e.g. you moved the repo) — re-run `enable` to
-   refresh.
-
-   Tailscale Serve/Funnel state is persisted by `tailscaled` itself
-   (the `--bg` flag in `./stack expose`), so it survives reboot too with
-   no extra config.
-
-   On macOS, systemd doesn't exist; add `./stack up` to a launchd
-   `~/Library/LaunchAgents/*.plist` or your shell startup if you want
-   the same behavior.
+- [`docs/cloud-deployment.md`](docs/cloud-deployment.md) — VPS setup, Linux Docker networking, UFW, and autostart.
+- [`docs/tailscale.md`](docs/tailscale.md) — Serve/Funnel policy, Service recovery, WSL-hosted services, and SSH/tag tradeoffs.
+- [`docs/proxy-routes.md`](docs/proxy-routes.md) — route file fields, reload flow, and single-target mode.
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) — common failure modes and fixes.
 
 ## Commands
 
@@ -544,38 +341,6 @@ and database without migration.
 
 ## Troubleshooting & FAQ
 
-**Manifest can't reach the proxy.** From inside the Manifest container, the
-proxy is at `host.docker.internal:${PROXY_PORT}`, **not** `localhost`. Make
-sure your provider Base URL uses `host.docker.internal`, and that `./stack
-status` reports `provider-proxy: running`.
-
-**provider-proxy failed to start.** Check `.stack/proxy.log` for the actual
-error. Common causes: port `9997` already taken, or `proxy.routes.json` is
-malformed (`./stack` will refuse to start the proxy if so). Fix and run
-`./stack restart`.
-
-**Homepage shows no tiles.** Stack-internal tiles come from Docker labels in
-`compose.yml` and require the Docker socket mount. If you've sandboxed Docker,
-the homepage container won't see other containers. Static tiles go in
-`homepage/services.template.yaml`; run `./stack restart homepage` after edits.
-
-**Tailnet group never appears.** Confirm either OAuth (`TAILSCALE_OAUTH_CLIENT_ID`
-\+ `TAILSCALE_OAUTH_CLIENT_SECRET`) or `TAILSCALE_API_KEY`, plus
-`TAILSCALE_TS_DOMAIN`, are set in `.env`. `./stack status` should list a
-`tailnet-poller` container. `docker logs tailnet-poller` shows API-call
-results.
-
-**Why does `provider-proxy` run on the host instead of in Docker?** It
-defaults to binding `127.0.0.1` as defense-in-depth, and containerizing it
-would force a Docker-network exposure it wasn't designed for. Running it as a
-host process keeps the surface area minimal — Manifest reaches it via
-`host.docker.internal`. On Linux, `PROXY_BIND=0.0.0.0` widens the bind so
-that hop works (see the Linux note); the host firewall is then the only
-public barrier.
-
-**Can I run only Manifest, without the proxy?** Yes. Delete `proxy.routes.json`
-and leave `PROXY_TARGET_HOST` blank in `.env` and the proxy is skipped.
-Configure Manifest providers directly against upstream URLs.
-
-**Where is data persisted?** Postgres data lives in the pinned `manifest_pgdata`
-Docker volume. `./stack down` stops containers but never removes that volume.
+See [`docs/troubleshooting.md`](docs/troubleshooting.md) for common failure
+modes: Manifest-to-proxy connectivity, proxy startup errors, missing Homepage
+tiles, tailnet-poller issues, and data persistence.
