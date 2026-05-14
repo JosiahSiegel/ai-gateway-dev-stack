@@ -18,6 +18,10 @@
 //   TAILSCALE_TAILNET        tailnet name; default "-" (your default tailnet)
 //   TAILSCALE_TS_DOMAIN      your-tailnet.ts.net (used as the fallback when
 //                            an API device record lacks a full FQDN)
+//   TAILSCALE_HOSTNAME       this node's Tailscale hostname; when set, the
+//                            poller adds an ssh:// tile for this host.
+//   HOMEPAGE_SSH_USER        SSH username for the host tile; default root.
+//   HOMEPAGE_SSH_TILE        set to 0/false/off to disable the host SSH tile.
 //   TAILSCALE_TAG_FILTER     optional, e.g. "tag:web". Empty = include all.
 //   POLL_INTERVAL_MS         default 60000
 //   TEMPLATE_PATH            input template
@@ -34,6 +38,9 @@ const OAUTH_CLIENT_SECRET = process.env.TAILSCALE_OAUTH_CLIENT_SECRET || '';
 const USE_OAUTH = !!(OAUTH_CLIENT_ID && OAUTH_CLIENT_SECRET);
 const TAILNET = process.env.TAILSCALE_TAILNET || '-';
 const TS_DOMAIN = process.env.TAILSCALE_TS_DOMAIN || '';
+const TAILSCALE_HOSTNAME = process.env.TAILSCALE_HOSTNAME || '';
+const HOMEPAGE_SSH_USER = process.env.HOMEPAGE_SSH_USER || 'root';
+const HOMEPAGE_SSH_TILE = !['0', 'false', 'off', 'no'].includes((process.env.HOMEPAGE_SSH_TILE || '1').toLowerCase());
 const TAG_FILTER = process.env.TAILSCALE_TAG_FILTER || '';
 const INTERVAL = parseInt(process.env.POLL_INTERVAL_MS || '60000', 10);
 const TEMPLATE_PATH = process.env.TEMPLATE_PATH || '/template/services.template.yaml';
@@ -182,6 +189,17 @@ function yqs(s) {
   return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 }
 
+function buildHostSshYaml() {
+  if (!HOMEPAGE_SSH_TILE || !TAILSCALE_HOSTNAME || !TS_DOMAIN) return '';
+  const fqdn = TAILSCALE_HOSTNAME.includes('.') ? TAILSCALE_HOSTNAME : `${TAILSCALE_HOSTNAME}.${TS_DOMAIN}`;
+  const out = ['- Infrastructure:'];
+  out.push('    - "This host SSH":');
+  out.push(`        href: ${yqs(`ssh://${HOMEPAGE_SSH_USER}@${fqdn}`)}`);
+  out.push(`        description: ${yqs(`SSH as ${HOMEPAGE_SSH_USER} via Tailscale`)}`);
+  out.push('        icon: mdi-console');
+  return out.join('\n') + '\n';
+}
+
 function buildTailnetYaml(devices) {
   let kept = devices.slice();
   if (TAG_FILTER) {
@@ -242,6 +260,7 @@ async function tick() {
   try {
     const template = fs.readFileSync(TEMPLATE_PATH, 'utf8');
     const devicesData = await fetchDevices();
+    const hostSshYaml = buildHostSshYaml();
     const tailnetYaml = buildTailnetYaml(devicesData.devices || []);
 
     // Services fetch is best-effort: missing scope or older API plan
@@ -269,7 +288,7 @@ async function tick() {
     if (match) base = base.slice(0, match.index);
     base = base.replace(/\s+$/, '') + '\n';
 
-    const managed = tailnetYaml + (servicesYaml ? '\n' + servicesYaml : '');
+    const managed = hostSshYaml + (hostSshYaml ? '\n' : '') + tailnetYaml + (servicesYaml ? '\n' + servicesYaml : '');
     const final = base + '\n' + MARKER + '\n' + managed;
 
     // Write in-place (no rename). Some file watchers — notably homepage's
