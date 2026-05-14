@@ -61,8 +61,10 @@ Legacy `PROXY_TARGETS=...` lines in `.env` are migrated into
   homepage fails to parse the YAML. `ensure_homepage_seed()` guarantees the
   file exists (empty fallback if the template is missing).
 - The tailnet-poller, when enabled, **overwrites** `.generated/services.yaml`
-  every tick — appending managed `- Tailnet:` and `- Tailscale Services:`
-  groups under a marker. Do not hand-edit those groups in the template.
+  every tick — appending managed `- Infrastructure:` (host SSH tile, when
+  `TAILSCALE_HOSTNAME` + `TAILSCALE_TS_DOMAIN` are set), `- Tailnet:`, and
+  `- Tailscale Services:` groups under a marker. Do not hand-edit those groups
+  in the template.
 - Stack-internal tiles (Manifest, Homepage) come from **Docker labels** in
   `compose.yml`, not from any yaml — that's how we avoid touching the
   `manifest-local` submodule to add label config.
@@ -107,8 +109,11 @@ Serve / Funnel. It calls `tailscale status --json` to discover the tailnet
 domain and node hostname, runs the appropriate `tailscale serve` /
 `tailscale funnel` commands, then writes the resulting URLs back into
 `.env` (`BETTER_AUTH_URL`, `HOMEPAGE_ALLOWED_HOSTS`, `HOMEPAGE_PUBLIC_URL`,
-`TAILSCALE_TS_DOMAIN`) and recreates the affected containers so they pick
-up the new origins.
+`TAILSCALE_TS_DOMAIN`, `TAILSCALE_HOSTNAME`) and recreates the affected
+containers so they pick up the new origins. `./stack up` also auto-fills a
+missing hostname/domain from `tailscale status` when possible. The
+hostname/domain pair lets the poller add a portable `ssh://` tile for "This
+host SSH" without hardcoding any user-specific FQDN in the repo.
 
 Constraints baked into the design:
 

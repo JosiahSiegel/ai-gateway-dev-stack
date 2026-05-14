@@ -323,6 +323,13 @@ up` then runs a `tailnet-poller` sidecar that rewrites
 `homepage/.generated/services.yaml` every minute with live tiles for your
 tailnet devices and any Tailscale VIP services.
 
+If `TAILSCALE_HOSTNAME` is also set, the poller adds an **Infrastructure → This
+host SSH** tile with `href: ssh://<HOMEPAGE_SSH_USER>@<host>.<tailnet>.ts.net`.
+`./stack up` auto-fills missing `TAILSCALE_TS_DOMAIN` and `TAILSCALE_HOSTNAME`
+from `tailscale status` when Tailscale is installed and logged in; `./stack
+expose` also refreshes both for the current node. `HOMEPAGE_SSH_USER` defaults
+to `root`; set `HOMEPAGE_SSH_TILE=0` to suppress the tile.
+
 OAuth client scopes (Tailscale admin → Settings → OAuth clients):
 
 - `devices:core:read` — required, populates the **Tailnet** group.
@@ -349,7 +356,7 @@ It will:
 3. Ask whether to publish Homepage as a **tailnet Service** (default) or skip.
 4. Run the appropriate `tailscale serve` / `tailscale funnel` commands.
 5. Update `.env` with `BETTER_AUTH_URL`, `HOMEPAGE_ALLOWED_HOSTS`,
-   `HOMEPAGE_PUBLIC_URL`, and `TAILSCALE_TS_DOMAIN`.
+   `HOMEPAGE_PUBLIC_URL`, `TAILSCALE_TS_DOMAIN`, and `TAILSCALE_HOSTNAME`.
 6. Recreate the affected containers so they pick up the new origins.
 
 To take this node out of rotation (e.g. before bringing the same Service up
@@ -482,7 +489,8 @@ in `.env` — they live in `proxy.routes.json`.
 | `HOMEPAGE_PORT` | `2100` | Homepage dashboard port |
 | `HOMEPAGE_ALLOWED_HOSTS` | `localhost:2100` | CSRF allow-list (add tailnet host here) |
 | `TAILSCALE_OAUTH_CLIENT_ID` + `TAILSCALE_OAUTH_CLIENT_SECRET` _or_ `TAILSCALE_API_KEY` | _unset_ | Enables tailnet-poller sidecar |
-| `TAILSCALE_TS_DOMAIN`, `TAILSCALE_TAILNET`, `TAILSCALE_TAG_FILTER`, `TAILSCALE_POLL_INTERVAL_MS` | _unset_ / `60000` | Tailnet poller tunables |
+| `TAILSCALE_TS_DOMAIN`, `TAILSCALE_HOSTNAME`, `TAILSCALE_TAILNET`, `TAILSCALE_TAG_FILTER`, `TAILSCALE_POLL_INTERVAL_MS` | _unset_ / `60000` | Tailnet poller tunables |
+| `HOMEPAGE_SSH_USER`, `HOMEPAGE_SSH_TILE` | `root`, `1` | Dynamic `ssh://` tile for this host |
 | `CLAUDE_CODE_MANIFEST_URL`, `CLAUDE_CODE_MODEL` | _derived_ | Used only by `./stack claude` output |
 
 See `.env.example` for the full annotated list.
