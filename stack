@@ -245,7 +245,12 @@ ensure_tailscale_identity_env() {
     changed=1
   fi
 
-  [ "$changed" = "1" ] && log "detected Tailscale identity for Homepage SSH tile"
+  # NOTE: do not collapse this to `[ x ] && log ...`. As the final expression
+  # in the function, that form returns 1 when changed=0, and `set -e` in the
+  # caller (cmd_up) silently aborts the whole script.
+  if [ "$changed" = "1" ]; then
+    log "detected Tailscale identity for Homepage SSH tile"
+  fi
 }
 
 # Best-effort `tailscale ... off` — never fails the script.
