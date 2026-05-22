@@ -455,6 +455,27 @@ cmd_status() {
 }
 
 cmd_logs() {
+  local tail_n=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -n|--tail) tail_n="${2:-20}"; shift ;;
+      -n*) tail_n="${1#-n}" ;;
+      --tail=*) tail_n="${1#*=}" ;;
+      *) die "unknown flag: $1 (try -n <lines> or --tail <lines>)" ;;
+    esac
+    shift
+  done
+
+  if [ -n "$tail_n" ]; then
+    # Non-streaming: show last N lines from each source, then exit.
+    if proxy_running; then
+      printf '\033[1;36m[stack]\033[0m provider-proxy (last %s lines per service):\n' "$tail_n"
+      tail -n "$tail_n" "$PROXY_LOG" 2>/dev/null || true
+    fi
+    compose logs --tail "$tail_n"
+    return 0
+  fi
+
   log "tailing manifest + proxy logs (ctrl-c to stop)"
   if proxy_running; then
     tail -F "$PROXY_LOG" &
@@ -903,7 +924,7 @@ case "$subcmd" in
   down)      cmd_down ;;
   restart)   cmd_restart "$@" ;;
   status|ps) cmd_status ;;
-  logs)      cmd_logs ;;
+  logs)      cmd_logs "$@" ;;
   pull)      cmd_pull ;;
   opencode)  cmd_opencode ;;
   claude)    cmd_claude ;;
