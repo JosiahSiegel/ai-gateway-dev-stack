@@ -321,6 +321,28 @@ See `.env.example` for the full annotated list.
 Pulls the latest commits on each submodule's default branch, pulls the latest
 Manifest Docker image, and restarts the stack.
 
+Quick provider-proxy-only refresh for VPS troubleshooting:
+
+```bash
+git -C provider-proxy fetch origin
+git -C provider-proxy checkout main
+git -C provider-proxy pull --ff-only
+npm --prefix provider-proxy install
+./stack restart
+```
+
+Verify the agy/Tailscale fixes are present before restarting:
+
+```bash
+git -C provider-proxy grep -n "discoverPrefix"
+git -C provider-proxy grep -n "agyPaths"
+git -C provider-proxy grep -n "\\[agy\\] incoming"
+```
+
+The first command updates the checked-out submodule contents. The parent repo only
+records a submodule commit pointer; pulling the parent alone does not guarantee
+`provider-proxy/` is on the latest commit.
+
 ## Layout
 
 ```text
