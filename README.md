@@ -43,7 +43,7 @@ rate limiting, and a single token** without each tool needing direct upstream
 credentials. This stack pre-wires the three pieces so the only thing you do is
 `./stack up`.
 
-- **Zero npm/pip install** — proxy is single-file Node with no deps; everything else is Docker.
+- **Minimal host install** — reverse-proxy-only use needs Node.js; PTY-backed `agy` support uses the provider-proxy `node-pty` dependency.
 - **One `.env`** for the whole stack, with auto-generated secrets on first run.
 - **Stack-internal services auto-appear** on the Homepage via Docker labels.
 - **Compatible with existing `manifest-local` installs** — same Compose project name and Postgres volume.
@@ -55,7 +55,9 @@ credentials. This stack pre-wires the three pieces so the only thing you do is
 ┌─────────────────────┐   ┌────────────────────┐   ┌──────────────────────┐   ┌──────────────┐
 │ OpenCode /          │──►│ Manifest           │──►│ provider-proxy       │──►│ upstream LLM │
 │ Claude Code         │   │ (Docker :2099)     │   │ (host :9997)         │   │ providers    │
-└─────────────────────┘   └────────────────────┘   └──────────────────────┘   └──────────────┘
+└─────────────────────┘   └────────────────────┘   └──────────────────────┘   └───────┬──────┘
+                                                               │                       │
+                                                               └─ /agy/v1 -> agy --print
 
   side-car (not on the request pipe):
     Homepage (Docker :2100)  — landing page tiles for the stack
@@ -118,11 +120,16 @@ from inside Docker:
 ```text
 http://host.docker.internal:9997/openai/v1
 http://host.docker.internal:9997/kimi/coding/v1
+http://host.docker.internal:9997/agy/v1
 ```
 
 The path after the `pathPrefix` is forwarded upstream verbatim, so each provider's
 "real" path lives here: `/openai/v1` -> `api.openai.com/v1`,
 `/kimi/coding/v1` -> `api.kimi.com/coding/v1` (Kimi's coding-tuned endpoint).
+The `/agy/v1` route is built into provider-proxy and wraps the local `agy --print`
+CLI; use model `agy/antigravity`. To authenticate `agy` on a VPS, open the UI over
+Tailscale at `http://<vps-tailnet-name>:9997/agy/` and complete the Google
+login flow for the same OS user that runs `provider-proxy`.
 
 > **Windows users**: use `.\stack.ps1 <command>`. It forwards into WSL or Git Bash automatically.
 
@@ -156,12 +163,16 @@ stay local.
 Routes live in **`proxy.routes.json`** at the repo root (gitignored). On first
 run, `./stack up` copies `proxy.routes.example.json` into place.
 
-Manifest reaches routes through the host proxy:
+Manifest reaches upstream proxy routes through the host proxy:
 
 ```text
 http://host.docker.internal:9997/openai/v1
 http://host.docker.internal:9997/kimi/coding/v1
 ```
+
+The built-in `agy` provider is not configured in `proxy.routes.json`; use
+`http://host.docker.internal:9997/agy/v1` and configure it with `AGY_*` variables
+in `.env` when needed.
 
 Edit `proxy.routes.json`, then run `./stack restart`. The script validates the
 JSON before starting the proxy.
@@ -283,6 +294,14 @@ in `.env` — they live in `proxy.routes.json`.
 | `PROXY_USER_AGENT` | _set_ | Default UA injected on every upstream request |
 | `PROXY_EXTRA_HEADERS` | _unset_ | JSON object of extra global headers |
 | `PROXY_DEBUG`, `PROXY_DEBUG_BODY` | _unset_ | Verbose logging |
+| `AGY_PATH_PREFIX` | `/agy` | Built-in Antigravity/agy provider route prefix; do not add this to `proxy.routes.json` |
+| `AGY_BIN` | auto-detected / `agy` | Explicit `agy` binary path |
+| `AGY_MODEL` | `agy/antigravity` | Model ID returned by `/agy/v1/models` |
+| `AGY_TIMEOUT_MS` | `300000` | Per-request `agy --print` timeout |
+| `AGY_MAX_CONCURRENCY` | `1` | Maximum concurrent `agy` subprocesses |
+| `AGY_PROVIDER_API_KEY` | _unset_ | Optional bearer token required from clients hitting `/agy/v1` |
+| `AGY_USE_PTY` | enabled when `node-pty` is installed | Set `0` to disable PTY/ConPTY mode |
+| `AGY_DEBUG` | _unset_ | Set `1` for subprocess diagnostics |
 | `HOMEPAGE_PORT` | `2100` | Homepage dashboard port |
 | `HOMEPAGE_ALLOWED_HOSTS` | `localhost:2100` | CSRF allow-list (add tailnet host here) |
 | `TAILSCALE_OAUTH_CLIENT_ID` + `TAILSCALE_OAUTH_CLIENT_SECRET` _or_ `TAILSCALE_API_KEY` | _unset_ | Enables tailnet-poller sidecar |
@@ -336,7 +355,7 @@ and database without migration.
 ## Requirements
 
 - **Docker** (Docker Desktop with WSL integration on Windows is fine)
-- **Node.js 18+** on the host (provider-proxy uses only built-in modules — no `npm install`)
+- **Node.js 18+** on the host (reverse-proxy-only use needs Node; PTY-backed `agy` support uses `node-pty` from the provider-proxy submodule)
 - **Bash** (WSL, Git Bash, macOS, or Linux)
 
 ## Troubleshooting & FAQ
