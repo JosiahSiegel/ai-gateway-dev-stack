@@ -36,7 +36,7 @@ Use this Manifest Base URL from Docker:
 http://host.docker.internal:9997/agy/v1
 ```
 
-Change the prefix with `AGY_PATH_PREFIX` in `.env` if `/agy` conflicts with an upstream route.
+Change the prefix with `AGY_PATH_PREFIX` in `.env` if `/agy` conflicts with an upstream route. For the full `/agy` endpoint contract, PTY dependency notes, and security guidance, see [`provider-proxy/README.md`](../provider-proxy/README.md).
 
 ## Supported fields
 

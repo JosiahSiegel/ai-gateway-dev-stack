@@ -38,8 +38,11 @@ Check:
 - `agy --print "Reply with OK"` works in the same terminal/account that runs `./stack` or the systemd unit.
 - On a VPS, the setup UI is reachable over Tailscale at `http://<vps-tailnet-name>:${PROXY_PORT}/agy/` and the Google login is completed for that same OS user.
 - Manifest uses `http://host.docker.internal:${PROXY_PORT}/agy/v1`, not `localhost`, when running in Docker.
-- PTY mode stays enabled on Windows; use `AGY_USE_PTY=0` only for debugging plain-pipe behavior.
-- `.stack/proxy.log` shows the resolved `agy` binary and any subprocess error.
+- PTY mode stays enabled when available; use `AGY_USE_PTY=0` only for debugging plain-pipe behavior.
+- `.stack/proxy.log` shows the resolved `agy` binary, PTY status, request path, and subprocess errors. Useful lines include `Built-in agy PTY: enabled`, `[agy] incoming ...`, and `[agy] chat request start...`.
+- From the host, `curl http://127.0.0.1:${PROXY_PORT:-9997}/agy/health` should return JSON.
+- From a container, `curl http://host.docker.internal:${PROXY_PORT:-9997}/agy/health` should return JSON.
+- If the UI is path-mounted through Tailscale Serve, check whether requests arrive as `/agy/...` or `/agy/agy/...` in `.stack/proxy.log`.
 
 ## Homepage shows no tiles
 

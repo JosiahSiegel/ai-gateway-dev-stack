@@ -99,12 +99,13 @@ live in [`docs/cloud-deployment.md`](docs/cloud-deployment.md).
 `./stack up` will, in order:
 
 1. Initialize the `manifest-local` and `provider-proxy` submodules if needed.
-2. Create `.env` from `.env.example` on first run.
-3. Auto-generate `BETTER_AUTH_SECRET` and `MANIFEST_ENCRYPTION_KEY`.
-4. Seed `proxy.routes.json` from `proxy.routes.example.json` (`/openai` + `/kimi`).
-5. Seed `homepage/.generated/services.yaml` from the template.
-6. Bring up Manifest + Postgres + Homepage via Docker Compose.
-7. Start `provider-proxy` on the host (binds `127.0.0.1:9997` by default; see
+2. Install `provider-proxy` npm dependencies when its `package.json` is present, so PTY-backed `/agy` support can load `node-pty`.
+3. Create `.env` from `.env.example` on first run.
+4. Auto-generate `BETTER_AUTH_SECRET` and `MANIFEST_ENCRYPTION_KEY`.
+5. Seed `proxy.routes.json` from `proxy.routes.example.json` (`/openai` + `/kimi`).
+6. Seed `homepage/.generated/services.yaml` from the template.
+7. Bring up Manifest + Postgres + Homepage via Docker Compose.
+8. Start `provider-proxy` on the host (binds `127.0.0.1:9997` by default; see
    `PROXY_BIND` for the Linux Docker case).
 
 Then open:
@@ -128,8 +129,10 @@ The path after the `pathPrefix` is forwarded upstream verbatim, so each provider
 `/kimi/coding/v1` -> `api.kimi.com/coding/v1` (Kimi's coding-tuned endpoint).
 The `/agy/v1` route is built into provider-proxy and wraps the local `agy --print`
 CLI; use model `agy/antigravity`. To authenticate `agy` on a VPS, open the UI over
-Tailscale at `http://<vps-tailnet-name>:9997/agy/` and complete the Google
-login flow for the same OS user that runs `provider-proxy`.
+private Tailscale at `http://<vps-tailnet-name>:9997/agy/` and complete the Google
+login flow for the same OS user that runs `provider-proxy`. Keep `/agy` private to
+localhost or your tailnet; set `AGY_PROVIDER_API_KEY` if non-local clients can
+reach `/agy/v1`, and do not expose the setup UI through public Funnel.
 
 > **Windows users**: use `.\stack.ps1 <command>`. It forwards into WSL or Git Bash automatically.
 
@@ -301,6 +304,7 @@ in `.env` — they live in `proxy.routes.json`.
 | `AGY_MAX_CONCURRENCY` | `1` | Maximum concurrent `agy` subprocesses |
 | `AGY_PROVIDER_API_KEY` | _unset_ | Optional bearer token required from clients hitting `/agy/v1` |
 | `AGY_USE_PTY` | enabled when `node-pty` is installed | Set `0` to disable PTY/ConPTY mode |
+| `AGY_ARG_PROMPT_MAX_BYTES` | `16000` | Prompts above this size are passed to `agy` through a temporary file reference to avoid OS argument-length limits |
 | `AGY_DEBUG` | _unset_ | Set `1` for subprocess diagnostics |
 | `HOMEPAGE_PORT` | `2100` | Homepage dashboard port |
 | `HOMEPAGE_ALLOWED_HOSTS` | `localhost:2100` | CSRF allow-list (add tailnet host here) |
@@ -331,17 +335,17 @@ npm --prefix provider-proxy install
 ./stack restart
 ```
 
-Verify the agy/Tailscale fixes are present before restarting:
+Verify behavior after restart:
 
 ```bash
-git -C provider-proxy grep -n "discoverPrefix"
-git -C provider-proxy grep -n "agyPaths"
-git -C provider-proxy grep -n "\\[agy\\] incoming"
+curl http://127.0.0.1:${PROXY_PORT:-9997}/agy/health
+tail -n 80 .stack/proxy.log
 ```
 
-The first command updates the checked-out submodule contents. The parent repo only
-records a submodule commit pointer; pulling the parent alone does not guarantee
-`provider-proxy/` is on the latest commit.
+The log should show `Built-in agy PTY: enabled` when `node-pty` is installed.
+`provider-proxy/package-lock.json` is intentionally committed so submodule installs
+are reproducible. The parent repo only records a submodule commit pointer; pulling
+the parent alone does not guarantee `provider-proxy/` is on the latest commit.
 
 ## Layout
 
