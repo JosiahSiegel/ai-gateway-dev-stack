@@ -64,12 +64,17 @@ credentials. This stack pre-wires the three pieces so the only thing you do is
     tailnet-poller           — optional, profile: tailnet
 ```
 
-Manifest reaches the host proxy via `host.docker.internal:${PROXY_PORT}`. The
-proxy defaults to binding `127.0.0.1` (not exposed to Docker networks or the
-LAN). On Linux, where `host.docker.internal` resolves to the Docker bridge
-rather than the loopback, `PROXY_BIND=0.0.0.0` is required so the container
-can connect; the host firewall must then block the proxy port from outside
-the box. See the "Linux note" under cloud deployment.
+Manifest reaches the host proxy via `host.docker.internal:${PROXY_PORT}` when
+provider-proxy runs on the same machine as the stack. The proxy can also run on a
+separate Windows machine where `agy` is authenticated in that user's desktop
+session; in that case, expose the proxy only over your tailnet and point Manifest
+at `http://<windows-tailnet-name>:9999/agy/v1`. The proxy defaults to binding
+`127.0.0.1` (not exposed to Docker networks or the LAN). On Linux, where
+`host.docker.internal` resolves to the Docker bridge rather than the loopback,
+`PROXY_BIND=0.0.0.0` is required so the container can connect; on Windows,
+`PROXY_BIND=0.0.0.0` is also required when tailnet peers need to reach the local
+proxy. In both cases, the host firewall must block the proxy port from untrusted
+networks. See the "Linux note" under cloud deployment.
 
 ## Quickstart
 
@@ -291,9 +296,16 @@ in `.env` — they live in `proxy.routes.json`.
 | `BETTER_AUTH_SECRET` | _auto_ | Session signing secret (generated if blank) |
 | `MANIFEST_ENCRYPTION_KEY` | _auto_ | At-rest encryption for stored provider credentials |
 | `PROVIDER_TIMEOUT_MS` | `600000` | Manifest upstream timeout (raised for slow local models) |
+| `MANIFEST_IMAGE` | `ghcr.io/josiahsiegel/manifest:latest` | Manifest image used by Compose |
+| `CONCURRENCY_MAX` | `50` | Manifest per-user proxy concurrency |
+| `MANIFEST_TELEMETRY_DISABLED` | _unset_ | Set `1` to disable anonymous Manifest telemetry |
+| `POSTGRES_PASSWORD` | `manifest` | Postgres password; keep in sync with `DATABASE_URL` if both are set |
+| `DATABASE_URL` | `postgresql://manifest:manifest@postgres:5432/manifest` | Manifest Postgres connection string |
 | `PROXY_PORT` | `9997` | Host proxy port |
 | `PROXY_BIND` | `127.0.0.1` | Host proxy bind address. Set to `0.0.0.0` on Linux when a Docker container must reach the proxy via `host.docker.internal`. |
 | `PROXY_TARGET_HOST` | _unset_ | Single-target alternative to `proxy.routes.json` |
+| `PROXY_TARGET_PROTOCOL` | `https` | Protocol for single-target proxy mode |
+| `PROXY_TARGET_PORT` | `443` | Port for single-target proxy mode |
 | `PROXY_USER_AGENT` | _set_ | Default UA injected on every upstream request |
 | `PROXY_EXTRA_HEADERS` | _unset_ | JSON object of extra global headers |
 | `PROXY_DEBUG`, `PROXY_DEBUG_BODY` | _unset_ | Verbose logging |
@@ -308,6 +320,9 @@ in `.env` — they live in `proxy.routes.json`.
 | `AGY_DEBUG` | _unset_ | Set `1` for subprocess diagnostics |
 | `HOMEPAGE_PORT` | `2100` | Homepage dashboard port |
 | `HOMEPAGE_ALLOWED_HOSTS` | `localhost:2100` | CSRF allow-list (add tailnet host here) |
+| `HOMEPAGE_PUBLIC_URL` | _unset_ | Public URL Homepage should link to itself with, usually a tailnet URL |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | _unset_ | Optional Google OAuth credentials for Manifest login |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | _unset_ | Optional GitHub OAuth credentials for Manifest login |
 | `TAILSCALE_OAUTH_CLIENT_ID` + `TAILSCALE_OAUTH_CLIENT_SECRET` _or_ `TAILSCALE_API_KEY` | _unset_ | Enables tailnet-poller sidecar |
 | `TAILSCALE_TS_DOMAIN`, `TAILSCALE_HOSTNAME`, `TAILSCALE_TAILNET`, `TAILSCALE_TAG_FILTER`, `TAILSCALE_POLL_INTERVAL_MS` | _unset_ / `60000` | Tailnet poller tunables |
 | `HOMEPAGE_SSH_USER`, `HOMEPAGE_SSH_TILE` | `root`, `1` | Dynamic `ssh://` tile for this host |

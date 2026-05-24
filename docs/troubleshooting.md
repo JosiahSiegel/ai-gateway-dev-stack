@@ -44,6 +44,16 @@ Check:
 - From a container, `curl http://host.docker.internal:${PROXY_PORT:-9997}/agy/health` should return JSON.
 - If the UI is path-mounted through Tailscale Serve, check whether requests arrive as `/agy/...` or `/agy/agy/...` in `.stack/proxy.log`.
 
+## `execvp(3) failed.: Argument list too long` from `/agy`
+
+Large Manifest requests, such as PR reviews or long conversations, can exceed the OS argument-length limit when passed directly to `agy --print`.
+
+Fix:
+
+- Keep `AGY_ARG_PROMPT_MAX_BYTES=16000` in `.env`, or lower it if the host still reports argv-length failures.
+- Restart provider-proxy with `./stack restart` after changing `.env`.
+- The proxy writes prompts above this byte size to a temporary file and passes `agy --print` a short instruction that references that file. Temporary files are cleaned up on completion, error, and timeout.
+
 ## Homepage shows no tiles
 
 Stack-internal tiles come from Docker labels in `compose.yml` and require the Docker socket mount. If Docker is sandboxed or the socket mount is removed, the homepage container cannot discover other containers.
