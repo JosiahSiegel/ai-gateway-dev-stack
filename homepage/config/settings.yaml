@@ -2,7 +2,7 @@
 # Full reference: https://gethomepage.dev/configs/settings/
 
 title: AI Gateway Stack
-headerStyle: clean
+headerStyle: boxedWidgets
 language: en
 theme: dark
 color: slate
@@ -22,7 +22,10 @@ quicklaunch:
 layout:
   AI Gateway Stack:
     style: row
-    columns: 3
+    columns: 4
   Tailnet:
+    style: row
+    columns: 4
+  Tailscale Services:
     style: row
     columns: 4
