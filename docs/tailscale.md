@@ -107,4 +107,4 @@ Only add that rule if devices with those tags should have root SSH access to the
 - Funnel ports are limited to `443`, `8443`, or `10000`; `./stack expose` defaults to `443`.
 - Funnel and a Service `serve` cannot share the same port on the same node; `tailscaled` only binds the port once.
 - The default `--manifest=funnel` gives Manifest a public Funnel URL. Use `--manifest=service` for a tailnet-only hostname.
-- The `provider-proxy` is intentionally not exposed via Tailscale. It stays loopback-bound on the host and is only reached by Manifest through the Docker bridge.
+- `provider-proxy` is not managed by `./stack expose` as a public Serve/Funnel target. It may still be reachable through the node's private tailnet name or IP when `PROXY_BIND` and the host firewall allow it, which is useful for the private `/agy/` setup UI. Do not publish `/agy` through public Funnel.

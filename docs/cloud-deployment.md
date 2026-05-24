@@ -102,6 +102,12 @@ Symptoms by failure mode:
 - Loopback-only `PROXY_BIND`: the host refuses the TCP connection.
 - Bad UFW order: the SYN is dropped, usually `curl: (28) Connection timed out`, not "Connection refused".
 
+Verify the built-in agy route from the Manifest container or another container on the compose network with:
+
+```bash
+curl http://host.docker.internal:${PROXY_PORT:-9997}/agy/health
+```
+
 ## Reboot survival
 
 The stack auto-recovers from a VPS reboot in two pieces:
@@ -114,6 +120,8 @@ sudo ./stack autostart enable
 ```
 
 That writes `/etc/systemd/system/ai-gateway-dev-stack.service`, enables it, and starts it. The unit runs `./stack up` on boot, so the proxy comes back and containers are reconciled.
+
+If you use the built-in `/agy` provider on a VPS, authenticate `agy` as the same user that runs the systemd unit. Access the setup UI over Tailscale at `http://<vps-tailnet-name>:${PROXY_PORT:-9997}/agy/`, start interactive setup, and complete the Google login URL/code shown by `agy`. Set `AGY_BIN` in `.env` if the binary is not on that user's PATH.
 
 Useful commands:
 

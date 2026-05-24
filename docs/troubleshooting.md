@@ -6,7 +6,7 @@ From inside the Manifest container, the proxy is at `host.docker.internal:${PROX
 
 Check:
 
-- Manifest provider Base URL uses `host.docker.internal`.
+- Manifest provider Base URL uses `host.docker.internal`, for example `http://host.docker.internal:${PROXY_PORT}/agy/v1` for the built-in agy provider.
 - `./stack status` reports `provider-proxy: running`.
 - On Linux Docker, `PROXY_BIND=0.0.0.0` and UFW allow the compose subnet; see [`cloud-deployment.md`](cloud-deployment.md).
 
@@ -18,6 +18,8 @@ Common causes:
 
 - Port `9997` is already taken.
 - `proxy.routes.json` is malformed.
+- `agy` binary is not found or is not authenticated for the OS user running `./stack`.
+- PTY support is unavailable because `node-pty` is not installed or failed to build in the provider-proxy submodule.
 
 Fix the issue and run:
 
@@ -26,6 +28,31 @@ Fix the issue and run:
 ```
 
 `./stack` validates `proxy.routes.json` before starting the proxy and refuses to start if it is malformed.
+
+## Built-in agy provider hangs or returns 502
+
+The `/agy` route runs the local Antigravity CLI as a subprocess, so it must work for the same OS user running the host proxy.
+
+Check:
+
+- `agy --print "Reply with OK"` works in the same terminal/account that runs `./stack` or the systemd unit.
+- On a VPS, the setup UI is reachable over Tailscale at `http://<vps-tailnet-name>:${PROXY_PORT}/agy/` and the Google login is completed for that same OS user.
+- Manifest uses `http://host.docker.internal:${PROXY_PORT}/agy/v1`, not `localhost`, when running in Docker.
+- PTY mode stays enabled when available; use `AGY_USE_PTY=0` only for debugging plain-pipe behavior.
+- `.stack/proxy.log` shows the resolved `agy` binary, PTY status, request path, and subprocess errors. Useful lines include `Built-in agy PTY: enabled`, `[agy] incoming ...`, and `[agy] chat request start...`.
+- From the host, `curl http://127.0.0.1:${PROXY_PORT:-9997}/agy/health` should return JSON.
+- From a container, `curl http://host.docker.internal:${PROXY_PORT:-9997}/agy/health` should return JSON.
+- If the UI is path-mounted through Tailscale Serve, check whether requests arrive as `/agy/...` or `/agy/agy/...` in `.stack/proxy.log`.
+
+## `execvp(3) failed.: Argument list too long` from `/agy`
+
+Large Manifest requests, such as PR reviews or long conversations, can exceed the OS argument-length limit when passed directly to `agy --print`.
+
+Fix:
+
+- Keep `AGY_ARG_PROMPT_MAX_BYTES=16000` in `.env`, or lower it if the host still reports argv-length failures.
+- Restart provider-proxy with `./stack restart` after changing `.env`.
+- The proxy writes prompts above this byte size to a temporary file and passes `agy --print` a short instruction that references that file. Temporary files are cleaned up on completion, error, and timeout.
 
 ## Homepage shows no tiles
 

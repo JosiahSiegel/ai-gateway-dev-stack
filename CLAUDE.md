@@ -16,7 +16,7 @@ This file only covers things that are easy to get wrong when editing code here.
 Parent orchestration layer for a local AI gateway stack:
 
 - `manifest-local/` — **submodule**. Manifest dashboard + Postgres compose. Has its own `CLAUDE.md`.
-- `provider-proxy/` — **submodule**. Single-file zero-dep Node reverse proxy. Has its own `CLAUDE.md`.
+- `provider-proxy/` — **submodule**. Node reverse proxy plus integrated `/agy` OpenAI-compatible local provider; PTY-backed `agy` support uses optional `node-pty`. Has its own `CLAUDE.md`.
 - `homepage/` — **parent-owned**, not a submodule. gethomepage.dev config + an optional tailnet-poller sidecar.
 
 **Do not modify submodule internals from the parent repo** unless the task is
@@ -45,9 +45,9 @@ docker compose --project-directory . --env-file .env \
 - `--profile tailnet` is added automatically by `./stack` when tailnet creds
   are present in `.env`. Don't hardcode it.
 
-### `proxy.routes.json` is the single source of truth for routes
+### `proxy.routes.json` is the single source of truth for upstream routes
 
-Routes are **not** in `.env`. The `./stack` script:
+Routes for forwarded upstream providers are **not** in `.env`. Built-in routes such as `/agy` are implemented by `provider-proxy.js` itself and are configured with `AGY_*` env vars, not route objects. The `./stack` script:
 
 1. Seeds `proxy.routes.json` from `proxy.routes.example.json` on first boot.
 2. Validates it as JSON before starting the proxy (clearer error than the
@@ -201,7 +201,8 @@ hand-rolls.
 - `docker compose ... config --quiet` with and without `--profile tailnet`.
 - `./stack opencode` and `./stack claude` stdout must be valid JSON; the
   claude output is asserted to contain both `settings` and `settings_local`
-  blocks with the right env vars.
+  blocks with the right env vars. If helper output adds providers such as
+  `proxy-agy`, update CI assertions in lockstep.
 - `proxy.routes.example.json` must be a JSON array of `{pathPrefix, host, ...}`.
 - `node --check` on the proxy and the tailnet-poller scripts.
 
@@ -212,8 +213,11 @@ the corresponding CI assertion in lockstep.
 
 - First-run dashboard wizard is at `http://localhost:2099/setup`.
 - Manifest provider Base URLs must use `host.docker.internal`, e.g.
-  `http://host.docker.internal:9997/openai/v1`. From inside the Manifest
+  `http://host.docker.internal:9997/openai/v1` or the built-in agy route
+  `http://host.docker.internal:9997/agy/v1`. From inside the Manifest
   container, `localhost` is the container itself.
+- The built-in `/agy` provider runs `agy --print` as the host proxy user, so
+  that same OS account must have a working Antigravity login and `agy` binary.
 - The proxy defaults to `PROXY_BIND=127.0.0.1`. On Linux Docker, the
   `host.docker.internal:host-gateway` mapping routes container traffic via
   the docker bridge — loopback bind refuses it. Set `PROXY_BIND=0.0.0.0` in

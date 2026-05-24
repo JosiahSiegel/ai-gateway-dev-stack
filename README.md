@@ -43,7 +43,7 @@ rate limiting, and a single token** without each tool needing direct upstream
 credentials. This stack pre-wires the three pieces so the only thing you do is
 `./stack up`.
 
-- **Zero npm/pip install** — proxy is single-file Node with no deps; everything else is Docker.
+- **Minimal host install** — reverse-proxy-only use needs Node.js; PTY-backed `agy` support uses the provider-proxy `node-pty` dependency.
 - **One `.env`** for the whole stack, with auto-generated secrets on first run.
 - **Stack-internal services auto-appear** on the Homepage via Docker labels.
 - **Compatible with existing `manifest-local` installs** — same Compose project name and Postgres volume.
@@ -55,19 +55,26 @@ credentials. This stack pre-wires the three pieces so the only thing you do is
 ┌─────────────────────┐   ┌────────────────────┐   ┌──────────────────────┐   ┌──────────────┐
 │ OpenCode /          │──►│ Manifest           │──►│ provider-proxy       │──►│ upstream LLM │
 │ Claude Code         │   │ (Docker :2099)     │   │ (host :9997)         │   │ providers    │
-└─────────────────────┘   └────────────────────┘   └──────────────────────┘   └──────────────┘
+└─────────────────────┘   └────────────────────┘   └──────────────────────┘   └───────┬──────┘
+                                                               │                       │
+                                                               └─ /agy/v1 -> agy --print
 
   side-car (not on the request pipe):
     Homepage (Docker :2100)  — landing page tiles for the stack
     tailnet-poller           — optional, profile: tailnet
 ```
 
-Manifest reaches the host proxy via `host.docker.internal:${PROXY_PORT}`. The
-proxy defaults to binding `127.0.0.1` (not exposed to Docker networks or the
-LAN). On Linux, where `host.docker.internal` resolves to the Docker bridge
-rather than the loopback, `PROXY_BIND=0.0.0.0` is required so the container
-can connect; the host firewall must then block the proxy port from outside
-the box. See the "Linux note" under cloud deployment.
+Manifest reaches the host proxy via `host.docker.internal:${PROXY_PORT}` when
+provider-proxy runs on the same machine as the stack. The proxy can also run on a
+separate Windows machine where `agy` is authenticated in that user's desktop
+session; in that case, expose the proxy only over your tailnet and point Manifest
+at `http://<windows-tailnet-name>:9999/agy/v1`. The proxy defaults to binding
+`127.0.0.1` (not exposed to Docker networks or the LAN). On Linux, where
+`host.docker.internal` resolves to the Docker bridge rather than the loopback,
+`PROXY_BIND=0.0.0.0` is required so the container can connect; on Windows,
+`PROXY_BIND=0.0.0.0` is also required when tailnet peers need to reach the local
+proxy. In both cases, the host firewall must block the proxy port from untrusted
+networks. See the "Linux note" under cloud deployment.
 
 ## Quickstart
 
@@ -97,12 +104,13 @@ live in [`docs/cloud-deployment.md`](docs/cloud-deployment.md).
 `./stack up` will, in order:
 
 1. Initialize the `manifest-local` and `provider-proxy` submodules if needed.
-2. Create `.env` from `.env.example` on first run.
-3. Auto-generate `BETTER_AUTH_SECRET` and `MANIFEST_ENCRYPTION_KEY`.
-4. Seed `proxy.routes.json` from `proxy.routes.example.json` (`/openai` + `/kimi`).
-5. Seed `homepage/.generated/services.yaml` from the template.
-6. Bring up Manifest + Postgres + Homepage via Docker Compose.
-7. Start `provider-proxy` on the host (binds `127.0.0.1:9997` by default; see
+2. Install `provider-proxy` npm dependencies when its `package.json` is present, so PTY-backed `/agy` support can load `node-pty`.
+3. Create `.env` from `.env.example` on first run.
+4. Auto-generate `BETTER_AUTH_SECRET` and `MANIFEST_ENCRYPTION_KEY`.
+5. Seed `proxy.routes.json` from `proxy.routes.example.json` (`/openai` + `/kimi`).
+6. Seed `homepage/.generated/services.yaml` from the template.
+7. Bring up Manifest + Postgres + Homepage via Docker Compose.
+8. Start `provider-proxy` on the host (binds `127.0.0.1:9997` by default; see
    `PROXY_BIND` for the Linux Docker case).
 
 Then open:
@@ -118,11 +126,18 @@ from inside Docker:
 ```text
 http://host.docker.internal:9997/openai/v1
 http://host.docker.internal:9997/kimi/coding/v1
+http://host.docker.internal:9997/agy/v1
 ```
 
 The path after the `pathPrefix` is forwarded upstream verbatim, so each provider's
 "real" path lives here: `/openai/v1` -> `api.openai.com/v1`,
 `/kimi/coding/v1` -> `api.kimi.com/coding/v1` (Kimi's coding-tuned endpoint).
+The `/agy/v1` route is built into provider-proxy and wraps the local `agy --print`
+CLI; use model `agy/antigravity`. To authenticate `agy` on a VPS, open the UI over
+private Tailscale at `http://<vps-tailnet-name>:9997/agy/` and complete the Google
+login flow for the same OS user that runs `provider-proxy`. Keep `/agy` private to
+localhost or your tailnet; set `AGY_PROVIDER_API_KEY` if non-local clients can
+reach `/agy/v1`, and do not expose the setup UI through public Funnel.
 
 > **Windows users**: use `.\stack.ps1 <command>`. It forwards into WSL or Git Bash automatically.
 
@@ -156,12 +171,16 @@ stay local.
 Routes live in **`proxy.routes.json`** at the repo root (gitignored). On first
 run, `./stack up` copies `proxy.routes.example.json` into place.
 
-Manifest reaches routes through the host proxy:
+Manifest reaches upstream proxy routes through the host proxy:
 
 ```text
 http://host.docker.internal:9997/openai/v1
 http://host.docker.internal:9997/kimi/coding/v1
 ```
+
+The built-in `agy` provider is not configured in `proxy.routes.json`; use
+`http://host.docker.internal:9997/agy/v1` and configure it with `AGY_*` variables
+in `.env` when needed.
 
 Edit `proxy.routes.json`, then run `./stack restart`. The script validates the
 JSON before starting the proxy.
@@ -277,14 +296,33 @@ in `.env` — they live in `proxy.routes.json`.
 | `BETTER_AUTH_SECRET` | _auto_ | Session signing secret (generated if blank) |
 | `MANIFEST_ENCRYPTION_KEY` | _auto_ | At-rest encryption for stored provider credentials |
 | `PROVIDER_TIMEOUT_MS` | `600000` | Manifest upstream timeout (raised for slow local models) |
+| `MANIFEST_IMAGE` | `ghcr.io/josiahsiegel/manifest:latest` | Manifest image used by Compose |
+| `CONCURRENCY_MAX` | `50` | Manifest per-user proxy concurrency |
+| `MANIFEST_TELEMETRY_DISABLED` | _unset_ | Set `1` to disable anonymous Manifest telemetry |
+| `POSTGRES_PASSWORD` | `manifest` | Postgres password; keep in sync with `DATABASE_URL` if both are set |
+| `DATABASE_URL` | `postgresql://manifest:manifest@postgres:5432/manifest` | Manifest Postgres connection string |
 | `PROXY_PORT` | `9997` | Host proxy port |
 | `PROXY_BIND` | `127.0.0.1` | Host proxy bind address. Set to `0.0.0.0` on Linux when a Docker container must reach the proxy via `host.docker.internal`. |
 | `PROXY_TARGET_HOST` | _unset_ | Single-target alternative to `proxy.routes.json` |
+| `PROXY_TARGET_PROTOCOL` | `https` | Protocol for single-target proxy mode |
+| `PROXY_TARGET_PORT` | `443` | Port for single-target proxy mode |
 | `PROXY_USER_AGENT` | _set_ | Default UA injected on every upstream request |
 | `PROXY_EXTRA_HEADERS` | _unset_ | JSON object of extra global headers |
 | `PROXY_DEBUG`, `PROXY_DEBUG_BODY` | _unset_ | Verbose logging |
+| `AGY_PATH_PREFIX` | `/agy` | Built-in Antigravity/agy provider route prefix; do not add this to `proxy.routes.json` |
+| `AGY_BIN` | auto-detected / `agy` | Explicit `agy` binary path |
+| `AGY_MODEL` | `agy/antigravity` | Model ID returned by `/agy/v1/models` |
+| `AGY_TIMEOUT_MS` | `300000` | Per-request `agy --print` timeout |
+| `AGY_MAX_CONCURRENCY` | `1` | Maximum concurrent `agy` subprocesses |
+| `AGY_PROVIDER_API_KEY` | _unset_ | Optional bearer token required from clients hitting `/agy/v1` |
+| `AGY_USE_PTY` | enabled when `node-pty` is installed | Set `0` to disable PTY/ConPTY mode |
+| `AGY_ARG_PROMPT_MAX_BYTES` | `16000` | Prompts above this size are passed to `agy` through a temporary file reference to avoid OS argument-length limits |
+| `AGY_DEBUG` | _unset_ | Set `1` for subprocess diagnostics |
 | `HOMEPAGE_PORT` | `2100` | Homepage dashboard port |
 | `HOMEPAGE_ALLOWED_HOSTS` | `localhost:2100` | CSRF allow-list (add tailnet host here) |
+| `HOMEPAGE_PUBLIC_URL` | _unset_ | Public URL Homepage should link to itself with, usually a tailnet URL |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | _unset_ | Optional Google OAuth credentials for Manifest login |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | _unset_ | Optional GitHub OAuth credentials for Manifest login |
 | `TAILSCALE_OAUTH_CLIENT_ID` + `TAILSCALE_OAUTH_CLIENT_SECRET` _or_ `TAILSCALE_API_KEY` | _unset_ | Enables tailnet-poller sidecar |
 | `TAILSCALE_TS_DOMAIN`, `TAILSCALE_HOSTNAME`, `TAILSCALE_TAILNET`, `TAILSCALE_TAG_FILTER`, `TAILSCALE_POLL_INTERVAL_MS` | _unset_ / `60000` | Tailnet poller tunables |
 | `HOMEPAGE_SSH_USER`, `HOMEPAGE_SSH_TILE` | `root`, `1` | Dynamic `ssh://` tile for this host |
@@ -301,6 +339,28 @@ See `.env.example` for the full annotated list.
 
 Pulls the latest commits on each submodule's default branch, pulls the latest
 Manifest Docker image, and restarts the stack.
+
+Quick provider-proxy-only refresh for VPS troubleshooting:
+
+```bash
+git -C provider-proxy fetch origin
+git -C provider-proxy checkout main
+git -C provider-proxy pull --ff-only
+npm --prefix provider-proxy install
+./stack restart
+```
+
+Verify behavior after restart:
+
+```bash
+curl http://127.0.0.1:${PROXY_PORT:-9997}/agy/health
+tail -n 80 .stack/proxy.log
+```
+
+The log should show `Built-in agy PTY: enabled` when `node-pty` is installed.
+`provider-proxy/package-lock.json` is intentionally committed so submodule installs
+are reproducible. The parent repo only records a submodule commit pointer; pulling
+the parent alone does not guarantee `provider-proxy/` is on the latest commit.
 
 ## Layout
 
@@ -336,7 +396,7 @@ and database without migration.
 ## Requirements
 
 - **Docker** (Docker Desktop with WSL integration on Windows is fine)
-- **Node.js 18+** on the host (provider-proxy uses only built-in modules — no `npm install`)
+- **Node.js 18+** on the host (reverse-proxy-only use needs Node; PTY-backed `agy` support uses `node-pty` from the provider-proxy submodule)
 - **Bash** (WSL, Git Bash, macOS, or Linux)
 
 ## Troubleshooting & FAQ

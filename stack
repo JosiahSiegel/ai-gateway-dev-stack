@@ -320,10 +320,17 @@ proxy_start() {
     targets="$(cat "$ROUTES_FILE")"
   fi
 
-  if [ -z "$target_host" ] && [ -z "$targets" ]; then
+  local agy_configured
+  agy_configured="$(env_get AGY_PATH_PREFIX)$(env_get AGY_BIN)$(env_get AGY_MODEL)$(env_get AGY_PROVIDER_API_KEY)"
+
+  if [ -z "$target_host" ] && [ -z "$targets" ] && [ -z "$agy_configured" ]; then
     warn "no PROXY_TARGET_HOST set and no proxy.routes.json — skipping provider-proxy"
-    warn "copy proxy.routes.example.json -> proxy.routes.json (or set PROXY_TARGET_HOST in .env), then ./stack restart"
+    warn "copy proxy.routes.example.json -> proxy.routes.json, set PROXY_TARGET_HOST, or configure AGY_* in .env, then ./stack restart"
     return 0
+  fi
+
+  if [ -z "$target_host" ] && [ -z "$targets" ]; then
+    warn "starting provider-proxy with built-in routes only"
   fi
 
   local proxy_bind
@@ -345,10 +352,21 @@ proxy_start() {
     EXTRA_HEADERS="$(env_get PROXY_EXTRA_HEADERS)"
     DEBUG_PROXY="$(env_get PROXY_DEBUG)"
     DEBUG_BODY="$(env_get PROXY_DEBUG_BODY)"
+    AGY_PATH_PREFIX="$(env_get AGY_PATH_PREFIX)"
+    AGY_BIN="$(env_get AGY_BIN)"
+    AGY_MODEL="$(env_get AGY_MODEL)"
+    AGY_TIMEOUT_MS="$(env_get AGY_TIMEOUT_MS)"
+    AGY_MAX_CONCURRENCY="$(env_get AGY_MAX_CONCURRENCY)"
+    AGY_PROVIDER_API_KEY="$(env_get AGY_PROVIDER_API_KEY)"
+    AGY_USE_PTY="$(env_get AGY_USE_PTY)"
+    AGY_ARG_PROMPT_MAX_BYTES="$(env_get AGY_ARG_PROMPT_MAX_BYTES)"
+    AGY_DEBUG="$(env_get AGY_DEBUG)"
     TARGET_HOST="$target_host"
     TARGETS="$targets"
     export PROXY_PORT PROXY_BIND TARGET_HOST TARGET_PROTOCOL TARGET_PORT TARGETS \
-      USER_AGENT EXTRA_HEADERS DEBUG_PROXY DEBUG_BODY
+      USER_AGENT EXTRA_HEADERS DEBUG_PROXY DEBUG_BODY \
+      AGY_PATH_PREFIX AGY_BIN AGY_MODEL AGY_TIMEOUT_MS AGY_MAX_CONCURRENCY \
+      AGY_PROVIDER_API_KEY AGY_USE_PTY AGY_ARG_PROMPT_MAX_BYTES AGY_DEBUG
 
     nohup node "$ROOT/provider-proxy/provider-proxy.js" >>"$PROXY_LOG" 2>&1 &
     echo $! >"$PROXY_PID_FILE"
@@ -418,6 +436,7 @@ cmd_up() {
 
     http://host.docker.internal:${proxy_port}/openai/v1
     http://host.docker.internal:${proxy_port}/kimi/coding/v1
+    http://host.docker.internal:${proxy_port}/agy/v1       # built-in local agy provider
 
 EOF
 }
@@ -535,6 +554,14 @@ EOF
         "npm": "@ai-sdk/openai-compatible",
         "baseURL": "http://127.0.0.1:${proxy_port}/kimi/coding/v1"
       }
+    },
+    "proxy-agy": {
+      "name": "Proxy -> agy",
+      "options": {
+        "npm": "@ai-sdk/openai-compatible",
+        "baseURL": "http://127.0.0.1:${proxy_port}/agy/v1"
+      },
+      "models": { "antigravity": { "name": "Antigravity" } }
     }
   }
 }
