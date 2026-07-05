@@ -31,6 +31,18 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # ── TEMPORARY TRIAGE (anthropic-billing-header v0.6.2 debug capture) ──
+    # The plugin lives INSIDE this image, baked in at build time by the
+    # manifest-plugins repo (JosiahSiegel/manifest-plugins). The build
+    # fetches external plugins from external-plugins.local.json, which is
+    # materialized from the EXTERNAL_PLUGINS_LOCAL GitHub Actions secret
+    # at the start of the build-image workflow. To get v0.6.2 in this
+    # container: bump the ref in that secret to v0.6.2, then trigger an
+    # image rebuild (push any commit or tag to manifest-plugins:main).
+    # Until that image is rebuilt and pushed, this env var does nothing.
+    # 1 = summary (no PII). full = also dumps serialized body.
+    environment:
+      - MANIFEST_CC_DEBUG_CAPTURE=${MANIFEST_CC_DEBUG_CAPTURE:-1}
 
   postgres:
     # Same reasoning as manifest above — make Postgres come back on reboot
