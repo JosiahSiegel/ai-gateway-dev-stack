@@ -37,7 +37,11 @@ if [ ! -d "$install_dir" ]; then
   sudo -u "$target_user" git clone --recurse-submodules "$repo_url" "$install_dir"
 fi
 
+sudo -u "$target_user" -- bash -c "cd '$install_dir/claude-proxy' && make build"
+
 sudo -u "$target_user" -- bash -c "cd '$install_dir' && ./stack up"
+
+sudo -u "$target_user" -- bash -c "cd '$install_dir' && ./stack login --no-tty"
 
 # Survive reboots: install the systemd unit. Run as root (which we already
 # are) and impersonate target_user inside the unit. Idempotent — re-running
