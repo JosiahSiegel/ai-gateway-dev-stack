@@ -97,7 +97,7 @@ surface (matching the upstream `claude-proxy/docker-compose.yml` defaults):
 | `CLAUDE_PROXY_ENABLE_TOOLS` | `false` | Surface `tool_use` blocks to API clients. v1 default is `false` — the CLI runs the tool loop internally |
 | `CLAUDE_PROXY_STRUCTURED_LOGS` | `true` | Emit JSON-structured logs (parsed transparently by `./stack logs`) |
 | `CLAUDE_PROXY_CREDENTIALS_PATH_TEMPLATE` | `{home}/.claude/.credentials.json` | Path pattern for the OAuth credentials file. Supports `{home}` and `{slot=N}` template variables for multi-slot deployments |
-| `CLAUDE_PROXY_MODELS` | _empty_ | Comma-separated `api_name:cli_short_name` pairs (e.g. `claude-sonnet-4-5:sonnet,claude-opus-4-5:opus`). Drives both `/v1/models` and `body.model` → `claude --model` alias lookup. Empty = built-in 7-model hardcoded fallback. Override when Anthropic ships new model versions so the upgrade is an env-var change, not a code change |
+| `CLAUDE_PROXY_MODELS` | _empty_ | Comma-separated `api_name:cli_short_name` pairs (e.g. `claude-sonnet-4-5:sonnet,claude-opus-4-5:opus`). Drives both `/v1/models` and `body.model` → `claude --model` alias lookup. Empty = built-in 7-model hardcoded fallback. **Override with only the model short aliases the SHIPPED Claude Code CLI version actually recognizes** — see the troubleshooting note below |
 
 See `.env.example` for the annotated source of truth.
 
@@ -162,6 +162,42 @@ docker volume rm mnfst_claude-proxy-credentials
 
 (For multi-slot deployments, replace the credentials file inside the volume
 rather than wiping the whole volume.)
+
+### "Manifest sends to claude-proxy but no response comes back"
+
+The most common cause is a model name in the request body that the **Claude
+Code CLI subprocess** doesn't recognize. The proxy's `/v1/models` endpoint
+returns a 7-model list by default (`claude-opus-4-5` / `claude-sonnet-4-5`
+/ `claude-haiku-4-5` / `claude-opus-4-6` / `claude-sonnet-4-6` /
+`claude-opus-4-7` / `claude-opus-4-8`), but the CLI 2.1.233 that ships in
+the proxy's Dockerfile only accepts the **short aliases** `opus`,
+`sonnet`, `haiku`. Models like `claude-opus-4-7` or `claude-opus-4-8`
+get rejected by the CLI with:
+
+```
+[claude-code:unrecognized_model] {"model":"opus-4-8","query_source":"sdk"}
+```
+
+…and the subprocess exits with 0 output tokens. The proxy forwards the
+empty Anthropic-format response back to the client (a `message_delta` +
+`message_stop` with no `message_start` or `content_block_*`). The playground
+sees the response as "no content" and renders nothing.
+
+**Fix**: override `CLAUDE_PROXY_MODELS` in `.env` to advertise only the
+three short-alias models:
+
+```bash
+CLAUDE_PROXY_MODELS=claude-opus-4-5:opus,claude-sonnet-4-5:sonnet,claude-haiku-4-5:haiku
+```
+
+Then `./stack restart claude-proxy`. Re-add the Anthropic provider in
+Manifest if needed; it will now only show the three working models.
+
+The root cause is upstream: the proxy's `available_models` default
+over-advertises relative to what its pinned CLI version supports. This
+self-imposed restriction will go away when the proxy's Dockerfile bumps
+its `CLAUDE_VERSION` build arg to a CLI version that recognizes the newer
+model names.
 
 ### Log tailing
 
