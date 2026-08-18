@@ -60,6 +60,15 @@ services:
     build:
       context: ./claude-proxy
     image: claude-proxy:dev
+    # The image is built locally from ./claude-proxy and is NOT in any
+    # registry. Without `pull_policy: never`, Docker Compose V2 tries to
+    # pull `claude-proxy:dev` from a registry first and emits a misleading
+    # "pull access denied" warning even though the build will then succeed.
+    # `never` short-circuits the pull and goes straight to the build context.
+    # For fresh installs the operator must run `make build` in claude-proxy/
+    # before `./stack up` (handled by cloud-init.yaml / bootstrap-vps.sh);
+    # `./stack pull` (which calls `make build` itself) keeps the image fresh.
+    pull_policy: never
     container_name: claude-proxy
     restart: unless-stopped
     user: "1000:1000"
