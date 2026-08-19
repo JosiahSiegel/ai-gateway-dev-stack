@@ -61,6 +61,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Init only the public manifest-local submodule
+        run: |
+          # claude-proxy is private; GITHUB_TOKEN on PR runs cannot reach it,
+          # so we can't use `actions/checkout`'s `submodules: recursive`
+          # (which would fail the whole step). manifest-local is public, so
+          # initialize it by name.
+          git submodule update --init manifest-local
+
       - name: Seed .env from example
         run: |
           cp .env.example .env
