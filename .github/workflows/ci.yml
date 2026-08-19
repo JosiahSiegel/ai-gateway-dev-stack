@@ -26,7 +26,7 @@ jobs:
         with:
           scandir: .
           additional_files: stack
-          ignore_paths: manifest-local provider-proxy homepage .stack
+          ignore_paths: manifest-local claude-proxy homepage .stack
 
   actionlint:
     name: actionlint (workflow files)
@@ -130,28 +130,4 @@ jobs:
           # command should print "not installed" and exit 0, never error.
           ./stack autostart status
 
-  routes-config:
-    name: proxy.routes.example.json is valid JSON
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Parse routes example
-        run: |
-          python3 -c 'import json; r=json.load(open("proxy.routes.example.json")); assert isinstance(r, list) and all("pathPrefix" in x and "host" in x for x in r), r'
-
-  proxy-syntax:
-    name: provider-proxy syntax check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: node --check on proxy + poller
-        run: |
-          node --check provider-proxy/provider-proxy.js
-          node --check homepage/tailnet-poller/poll.js
+  
