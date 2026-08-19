@@ -145,9 +145,22 @@ print instructions without starting an interactive flow (CI, scripted):
 
 ### OAuth expiry / re-auth
 
-If the proxy keeps restarting or the dashboard's "Test connection" fails with
-an auth error after previously working, the OAuth token likely expired or was
-revoked. Re-run `./stack login` from an interactive terminal.
+Since submodule commit `91f5b3f` (PR #1, "always-auth"), the proxy
+auto-refreshes the OAuth access token in a daemon thread when within
+`CLAUDE_PROXY_REFRESH_LEAD_SECONDS` (default 300s) of expiry. The default
+OAuth client is Anthropic's public one (`9d1c250a-...`); override
+`CLAUDE_PROXY_OAUTH_CLIENT_ID` in `.env` only if you maintain a fork of the
+CLI with your own OAuth registration.
+
+Re-run `./stack login` only when auto-refresh is disabled, the refresh
+itself fails, or the credentials were revoked. The most common revocation
+signals are still: the proxy keeps restarting, or the dashboard's "Test
+connection" fails with an auth error after previously working. From an
+interactive terminal:
+
+```bash
+./stack login
+```
 
 Persistent volume caveat: the credentials volume survives `./stack restart`
 and host reboots. To **rotate** credentials (e.g. switch the subscription
