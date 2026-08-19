@@ -3,7 +3,6 @@ name: E2E
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
   schedule:
     # Weekly Monday 06:00 UTC — catch upstream Manifest image drift.
