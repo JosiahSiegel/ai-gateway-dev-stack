@@ -3,7 +3,6 @@ name: E2E
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
   schedule:
     # Weekly Monday 06:00 UTC — catch upstream Manifest image drift.
@@ -65,27 +64,24 @@ jobs:
           echo "Homepage never became reachable on :2100" >&2
           exit 1
 
-      - name: provider-proxy is listening on 127.0.0.1:9997
+      - name: claude-proxy is healthy (compose healthcheck reports healthy)
         run: |
-          for i in $(seq 1 15); do
-            if (echo > /dev/tcp/127.0.0.1/9997) >/dev/null 2>&1; then
-              echo "provider-proxy is accepting connections"
-              exit 0
-            fi
-            echo "attempt $i: proxy not yet listening"
-            sleep 1
+          for i in $(seq 1 30); do
+            code="$(docker compose \
+              --project-directory . \
+              --env-file .env \
+              -f manifest-local/docker-compose.yml \
+              -f compose.yml \
+              exec -T claude-proxy \
+              curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/healthz || true)"
+            echo "attempt $i: claude-proxy /healthz=$code"
+            case "$code" in
+              200) exit 0 ;;
+            esac
+            sleep 2
           done
-          echo "provider-proxy never opened port 9997" >&2
+          echo "claude-proxy never became healthy" >&2
           exit 1
-        shell: bash
-
-      - name: provider-proxy answers HTTP requests
-        # Hitting an unknown path may legitimately return 404/502; we only
-        # require that the proxy itself responds (not a connection refused).
-        run: |
-          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9997/ || true)"
-          echo "proxy root status=$code"
-          test -n "$code" && test "$code" != "000"
 
       - name: ./stack status
         if: always()
@@ -112,8 +108,12 @@ jobs:
             --env-file .env \
             -f manifest-local/docker-compose.yml \
             -f compose.yml logs homepage || true
-          echo "--- provider-proxy ---"
-          cat .stack/proxy.log || true
+          echo "--- claude-proxy ---"
+          docker compose \
+            --project-directory . \
+            --env-file .env \
+            -f manifest-local/docker-compose.yml \
+            -f compose.yml logs claude-proxy || true
 
       - name: Tear stack down
         if: always()

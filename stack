@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # ai-gateway-dev-stack — one-command orchestrator.
 #
-#   ./stack up        Bring everything up (manifest + postgres + proxy)
+#   ./stack up        Bring everything up (manifest + postgres + claude-proxy)
 #   ./stack down      Stop everything
 #   ./stack restart           Restart everything
 #   ./stack restart <svc>...  Restart only the given compose service(s)
 #   ./stack status    Show what's running
-#   ./stack logs      Tail logs from manifest + proxy
+#   ./stack logs      Tail logs from manifest + claude-proxy
 #   ./stack pull      Pull latest submodules + Docker images
+#   ./stack login     Run the Claude OAuth login in the claude-proxy container
+#                     (interactive; one-time per host)
 #   ./stack opencode  Print an opencode.json snippet pre-wired to this stack
 #   ./stack claude    Print Claude Code settings (.claude/*) pre-wired to this stack
 #   ./stack expose    Configure Tailscale Serve/Funnel + .env (interactive)
@@ -24,12 +26,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 STATE_DIR="$ROOT/.stack"
-PROXY_PID_FILE="$STATE_DIR/proxy.pid"
-PROXY_LOG="$STATE_DIR/proxy.log"
 ENV_FILE="$ROOT/.env"
 ENV_EXAMPLE="$ROOT/.env.example"
-ROUTES_FILE="$ROOT/proxy.routes.json"
-ROUTES_EXAMPLE="$ROOT/proxy.routes.example.json"
 HOMEPAGE_GENERATED_DIR="$ROOT/homepage/.generated"
 HOMEPAGE_GENERATED_SERVICES="$HOMEPAGE_GENERATED_DIR/services.yaml"
 
@@ -72,7 +70,7 @@ require_cmd() {
 }
 
 ensure_submodules() {
-  if [ ! -f "$ROOT/manifest-local/docker-compose.yml" ] || [ ! -f "$ROOT/provider-proxy/provider-proxy.js" ]; then
+  if [ ! -f "$ROOT/manifest-local/docker-compose.yml" ] || [ ! -f "$ROOT/claude-proxy/Dockerfile" ]; then
     log "initializing submodules"
     git submodule update --init --recursive
   fi
@@ -141,29 +139,6 @@ ensure_homepage_seed() {
   # If a leftover sits there, point it out so the user can clean up.
   if [ -f "$ROOT/homepage/config/services.yaml" ]; then
     warn "homepage/config/services.yaml is no longer used (moved to homepage/.generated/services.yaml). You can delete the old file."
-  fi
-}
-
-# Seed proxy.routes.json from the example on first boot, AND migrate any
-# legacy PROXY_TARGETS=... value still hanging out in .env. PROXY_TARGETS in
-# .env is no longer read — proxy.routes.json is the single source of truth.
-ensure_routes() {
-  if [ -f "$ROUTES_FILE" ]; then
-    return 0
-  fi
-
-  local legacy=""
-  [ -f "$ENV_FILE" ] && legacy="$(env_get PROXY_TARGETS)"
-  if [ -n "$legacy" ]; then
-    printf '%s\n' "$legacy" > "$ROUTES_FILE"
-    log "migrated PROXY_TARGETS from .env into proxy.routes.json"
-    warn "PROXY_TARGETS in .env is no longer read — you can delete that line."
-    return 0
-  fi
-
-  if [ -f "$ROUTES_EXAMPLE" ]; then
-    cp "$ROUTES_EXAMPLE" "$ROUTES_FILE"
-    log "created proxy.routes.json from proxy.routes.example.json"
   fi
 }
 
@@ -292,104 +267,12 @@ manifest_openai_base_url() {
   esac
 }
 
-# --- proxy lifecycle (host process, not Docker) ----------------------------
+# --- claude-proxy helpers --------------------------------------------------
 
-proxy_running() {
-  [ -f "$PROXY_PID_FILE" ] || return 1
-  local pid
-  pid="$(cat "$PROXY_PID_FILE" 2>/dev/null || true)"
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
-}
-
-proxy_start() {
-  if proxy_running; then
-    log "provider-proxy already running (pid $(cat "$PROXY_PID_FILE"))"
-    return 0
-  fi
-
-  require_cmd node
-
-  local target_host targets=""
-  target_host="$(env_get PROXY_TARGET_HOST || true)"
-  if [ -f "$ROUTES_FILE" ]; then
-    # Validate JSON early so we surface a clearer error than the proxy gives
-    # if the file is malformed.
-    if ! node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$ROUTES_FILE" 2>/dev/null; then
-      die "proxy.routes.json is not valid JSON — fix it or delete it to re-seed from proxy.routes.example.json"
-    fi
-    targets="$(cat "$ROUTES_FILE")"
-  fi
-
-  local agy_configured
-  agy_configured="$(env_get AGY_PATH_PREFIX)$(env_get AGY_BIN)$(env_get AGY_MODEL)$(env_get AGY_PROVIDER_API_KEY)"
-
-  if [ -z "$target_host" ] && [ -z "$targets" ] && [ -z "$agy_configured" ]; then
-    warn "no PROXY_TARGET_HOST set and no proxy.routes.json — skipping provider-proxy"
-    warn "copy proxy.routes.example.json -> proxy.routes.json, set PROXY_TARGET_HOST, or configure AGY_* in .env, then ./stack restart"
-    return 0
-  fi
-
-  if [ -z "$target_host" ] && [ -z "$targets" ]; then
-    warn "starting provider-proxy with built-in routes only"
-  fi
-
-  local proxy_bind
-  proxy_bind="$(env_get PROXY_BIND)"; proxy_bind="${proxy_bind:-127.0.0.1}"
-  log "starting provider-proxy on ${proxy_bind}:$(env_get PROXY_PORT || echo 9997)"
-  if [ "$proxy_bind" != "127.0.0.1" ]; then
-    warn "PROXY_BIND=${proxy_bind} — proxy is not loopback-only; the host firewall is the only barrier"
-  fi
-
-  # Build env for the child process. Variable names match provider-proxy.js.
-  # Assignment and export are split so shellcheck (SC2155) sees the env_get
-  # exit status — the export itself can't mask it.
-  (
-    PROXY_PORT="$(env_get PROXY_PORT)"
-    PROXY_BIND="$proxy_bind"
-    TARGET_PROTOCOL="$(env_get PROXY_TARGET_PROTOCOL)"
-    TARGET_PORT="$(env_get PROXY_TARGET_PORT)"
-    USER_AGENT="$(env_get PROXY_USER_AGENT)"
-    EXTRA_HEADERS="$(env_get PROXY_EXTRA_HEADERS)"
-    DEBUG_PROXY="$(env_get PROXY_DEBUG)"
-    DEBUG_BODY="$(env_get PROXY_DEBUG_BODY)"
-    AGY_PATH_PREFIX="$(env_get AGY_PATH_PREFIX)"
-    AGY_BIN="$(env_get AGY_BIN)"
-    AGY_MODEL="$(env_get AGY_MODEL)"
-    AGY_TIMEOUT_MS="$(env_get AGY_TIMEOUT_MS)"
-    AGY_MAX_CONCURRENCY="$(env_get AGY_MAX_CONCURRENCY)"
-    AGY_PROVIDER_API_KEY="$(env_get AGY_PROVIDER_API_KEY)"
-    AGY_USE_PTY="$(env_get AGY_USE_PTY)"
-    AGY_ARG_PROMPT_MAX_BYTES="$(env_get AGY_ARG_PROMPT_MAX_BYTES)"
-    AGY_DEBUG="$(env_get AGY_DEBUG)"
-    TARGET_HOST="$target_host"
-    TARGETS="$targets"
-    export PROXY_PORT PROXY_BIND TARGET_HOST TARGET_PROTOCOL TARGET_PORT TARGETS \
-      USER_AGENT EXTRA_HEADERS DEBUG_PROXY DEBUG_BODY \
-      AGY_PATH_PREFIX AGY_BIN AGY_MODEL AGY_TIMEOUT_MS AGY_MAX_CONCURRENCY \
-      AGY_PROVIDER_API_KEY AGY_USE_PTY AGY_ARG_PROMPT_MAX_BYTES AGY_DEBUG
-
-    nohup node "$ROOT/provider-proxy/provider-proxy.js" >>"$PROXY_LOG" 2>&1 &
-    echo $! >"$PROXY_PID_FILE"
-  )
-
-  sleep 1
-  if proxy_running; then
-    log "provider-proxy pid $(cat "$PROXY_PID_FILE"), logs at .stack/proxy.log"
-  else
-    die "provider-proxy failed to start — check .stack/proxy.log"
-  fi
-}
-
-proxy_stop() {
-  if proxy_running; then
-    local pid
-    pid="$(cat "$PROXY_PID_FILE")"
-    log "stopping provider-proxy (pid $pid)"
-    kill "$pid" 2>/dev/null || true
-    sleep 0.5
-    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-  fi
-  rm -f "$PROXY_PID_FILE"
+# Print a one-line hint that surfaces after `./stack up` so users know the
+# OAuth step is still pending. The actual flow lives in cmd_login.
+claude_proxy_first_run_hint() {
+  log "Claude OAuth: run ./stack login once before first use"
 }
 
 # --- commands --------------------------------------------------------------
@@ -398,19 +281,17 @@ cmd_up() {
   require_cmd docker
   ensure_submodules
   ensure_env
-  ensure_routes
   ensure_tailscale_identity_env
   ensure_homepage_seed
 
-  log "starting manifest + postgres + homepage (docker compose)"
+  log "starting manifest + postgres + claude-proxy + homepage (docker compose)"
   compose up -d
 
-  proxy_start
+  claude_proxy_first_run_hint
 
-  local port proxy_port proxy_bind homepage_port tailnet_msg
+  local port claude_proxy_port homepage_port tailnet_msg
   port="$(env_get PORT)"; port="${port:-2099}"
-  proxy_port="$(env_get PROXY_PORT)"; proxy_port="${proxy_port:-9997}"
-  proxy_bind="$(env_get PROXY_BIND)"; proxy_bind="${proxy_bind:-127.0.0.1}"
+  claude_proxy_port="$(env_get CLAUDE_PROXY_PORT)"; claude_proxy_port="${claude_proxy_port:-8080}"
   homepage_port="$(env_get HOMEPAGE_PORT)"; homepage_port="${homepage_port:-2100}"
   if tailnet_enabled; then
     tailnet_msg="enabled (tailnet-poller running)"
@@ -424,7 +305,7 @@ cmd_up() {
 
     Homepage dashboard:  http://localhost:${homepage_port}
     Manifest dashboard:  http://localhost:${port}
-    Provider proxy:      http://${proxy_bind}:${proxy_port}
+    Claude OAuth:        run './stack login' once before first use
     Tailnet discovery:   ${tailnet_msg}
     Logs:                ./stack logs
     Tear down:           ./stack down
@@ -432,24 +313,23 @@ cmd_up() {
     Claude Code setup:   ./stack claude
 
   First-run: open the Manifest dashboard, complete the /setup wizard, then
-  add LLM providers that point at the proxy, e.g.:
-
-    http://host.docker.internal:${proxy_port}/openai/v1
-    http://host.docker.internal:${proxy_port}/kimi/coding/v1
-    http://host.docker.internal:${proxy_port}/agy/v1       # built-in local agy provider
+  add an Anthropic-compatible LLM provider pointing at the in-network
+  claude-proxy service (Base URL http://claude-proxy:${claude_proxy_port}).
 
 EOF
 }
 
 cmd_down() {
-  proxy_stop
+  # Docker Compose owns the claude-proxy container lifecycle — no host
+  # process to stop. host.docker.internal / claude-proxy service resolution
+  # vanish with the stack; bring it back with ./stack up.
   if command -v docker >/dev/null 2>&1; then
     compose down
   fi
 }
 
 cmd_restart() {
-  # `./stack restart` with no args: full down + up (rebuilds host proxy too).
+  # `./stack restart` with no args: full down + up (rebuilds containers).
   # `./stack restart <service> [<service>...]`: recreate those compose
   # services. We use `up -d --force-recreate` instead of `restart` because
   # `restart` only re-runs the existing container — it does NOT re-read
@@ -465,10 +345,10 @@ cmd_restart() {
 }
 
 cmd_status() {
-  if proxy_running; then
-    log "provider-proxy: running (pid $(cat "$PROXY_PID_FILE"))"
+  if compose ps --status running claude-proxy 2>/dev/null | grep -q claude-proxy; then
+    log "claude-proxy: running"
   else
-    log "provider-proxy: stopped"
+    log "claude-proxy: not running (run ./stack up)"
   fi
   compose ps
 }
@@ -486,29 +366,105 @@ cmd_logs() {
   done
 
   if [ -n "$tail_n" ]; then
-    # Non-streaming: show last N lines from each source, then exit.
-    if proxy_running; then
-      printf '\033[1;36m[stack]\033[0m provider-proxy (last %s lines per service):\n' "$tail_n"
-      tail -n "$tail_n" "$PROXY_LOG" 2>/dev/null || true
-    fi
+    # Non-streaming: show last N lines from compose, then exit.
     compose logs --tail "$tail_n"
     return 0
   fi
 
-  log "tailing manifest + proxy logs (ctrl-c to stop)"
-  if proxy_running; then
-    tail -F "$PROXY_LOG" &
-    local tail_pid=$!
-    trap 'kill $tail_pid 2>/dev/null || true' EXIT INT TERM
-  fi
+  # Streaming: just follow compose logs. claude-proxy is in compose, so its
+  # output shows up here automatically.
+  log "tailing manifest + claude-proxy logs (ctrl-c to stop)"
   compose logs -f
 }
 
 cmd_pull() {
   log "updating submodules"
   git submodule update --remote --merge
+  log "rebuilding claude-proxy image (if its source changed)"
+  if [ -f "$ROOT/claude-proxy/Makefile" ]; then
+    ( cd "$ROOT/claude-proxy" && make build ) || warn "claude-proxy make build failed — run it manually if startup complains"
+  fi
   log "pulling docker images"
   compose pull
+}
+
+# Run the Claude OAuth login interactively inside the claude-proxy container.
+# One-time per host (creds persist in the claude-proxy-credentials named
+# volume). The flow is entirely interactive — there is no headless mode, so
+# we refuse to run on a non-TTY shell unless --no-tty is passed (in which
+# case we just print the instructions and exit).
+cmd_login() {
+  local no_tty=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --no-tty) no_tty=1 ;;
+      -h|--help|help)
+        cat <<EOF
+Usage: ./stack login [--no-tty]
+
+Run the Claude OAuth login interactively in the claude-proxy container.
+This is a one-time setup per host — once authenticated, credentials are
+persisted in the claude-proxy-credentials Docker volume.
+
+Arguments:
+  --no-tty   Print instructions instead of attaching to the container.
+             Use this when running from CI or a non-interactive shell.
+
+Requires:
+  - The stack must be running (./stack up).
+  - A real terminal attached (stdin must be a TTY), unless --no-tty.
+
+Notes:
+  - The login flow opens a browser URL that you paste into a browser
+    elsewhere and then paste the resulting code back into the terminal.
+  - Re-run this command any time Claude OAuth tokens need to be refreshed.
+EOF
+        return 0
+        ;;
+      *) die "unknown flag: $1 (try --no-tty)" ;;
+    esac
+    shift
+  done
+
+  require_cmd docker
+
+  # Refuse early if the container is not running — `compose exec` would
+  # hang waiting for it instead of giving a clear message.
+  if ! compose ps --status running claude-proxy 2>/dev/null | grep -q claude-proxy; then
+    die "claude-proxy container is not running. Run ./stack up first."
+  fi
+
+  if [ "$no_tty" = "1" ]; then
+    cat <<EOF
+
+  Claude OAuth login requires a real terminal.
+
+  Re-run ./stack login from an interactive shell (TTY attached). The
+  container's CLI will print a URL to open in a browser, then prompt
+  for the authorization code.
+
+  Refresh tokens by re-running this command any time the proxy logs
+  auth failures.
+
+EOF
+    return 0
+  fi
+
+  # `[ -t 0 ]` is true iff stdin is a terminal. Some wrapper scripts
+  # (e.g. `bash <(curl ...)` or CI) give us a pipe — refuse politely.
+  if [ ! -t 0 ]; then
+    cat >&2 <<EOF
+[stack] stdin is not a TTY — refusing to start an interactive OAuth flow.
+[stack] Run this command from a real terminal, or pass --no-tty to print instructions only.
+EOF
+    exit 1
+  fi
+
+  log "starting interactive Claude OAuth login in the claude-proxy container"
+  # Compose exec carries our project + env + profile flags through, so
+  # this honors the same --project-directory / --profile tailnet / .env
+  # setting as every other compose invocation here.
+  compose exec -it claude-proxy claude-proxy login
 }
 
 # Both `opencode` and `claude` emit a single parseable JSON document on
@@ -516,8 +472,8 @@ cmd_pull() {
 #   ./stack opencode > ~/.config/opencode/opencode.json
 #   ./stack claude   > /tmp/claude.json   # then split into .claude/*.json
 cmd_opencode() {
-  local proxy_port base_url openai_base_url model
-  proxy_port="$(env_get PROXY_PORT)"; proxy_port="${proxy_port:-9997}"
+  local claude_proxy_port base_url openai_base_url model
+  claude_proxy_port="$(env_get CLAUDE_PROXY_PORT)"; claude_proxy_port="${claude_proxy_port:-8080}"
   base_url="$(manifest_base_url)"
   openai_base_url="$(manifest_openai_base_url "$base_url")"
   model="$(env_get CLAUDE_CODE_MODEL)"
@@ -526,7 +482,9 @@ cmd_opencode() {
   cat >&2 <<EOF
 # Drop the stdout JSON into ~/.config/opencode/opencode.json (or this
 # project's opencode.json), then restart OpenCode. Manifest is the
-# recommended entry point; the proxy-* entries are for debugging.
+# recommended entry point; the claude-proxy entry is for debugging
+# (Anthropic-shaped requests going straight to the in-network proxy)
+# and is not the normal path.
 EOF
 
   cat <<EOF
@@ -541,27 +499,12 @@ EOF
       },
       "models": { "${model#manifest/}": { "name": "Manifest Auto" } }
     },
-    "proxy-openai": {
-      "name": "Proxy -> OpenAI",
+    "claude-proxy": {
+      "name": "claude-proxy (debug; Anthropic kind)",
       "options": {
-        "npm": "@ai-sdk/openai-compatible",
-        "baseURL": "http://127.0.0.1:${proxy_port}/openai/v1"
+        "npm": "@ai-sdk/anthropic",
+        "baseURL": "http://127.0.0.1:${claude_proxy_port}/v1"
       }
-    },
-    "proxy-kimi": {
-      "name": "Proxy -> Kimi",
-      "options": {
-        "npm": "@ai-sdk/openai-compatible",
-        "baseURL": "http://127.0.0.1:${proxy_port}/kimi/coding/v1"
-      }
-    },
-    "proxy-agy": {
-      "name": "Proxy -> agy",
-      "options": {
-        "npm": "@ai-sdk/openai-compatible",
-        "baseURL": "http://127.0.0.1:${proxy_port}/agy/v1"
-      },
-      "models": { "antigravity": { "name": "Antigravity" } }
     }
   }
 }
@@ -802,7 +745,6 @@ cmd_unexpose() {
   ts_off serve  --service=svc:manifest        --https=443 off
   ts_off serve  --service=svc:manifest        --https=8443 off
   ts_off serve  --service=svc:homepage        --https=443 off
-  ts_off serve  --service=svc:provider-proxy  --https=443 off
   log "current serve status:"
   tailscale serve status 2>/dev/null || true
   log "current funnel status:"
@@ -820,20 +762,19 @@ EOF
 
 # --- autostart (systemd unit so the stack survives host reboot) ------------
 #
-# Two reboot-survival pieces:
-#   1. Containers — handled by `restart: unless-stopped` policies in
-#      compose.yml (parent overlay adds them to manifest+postgres so the
-#      submodule stays untouched). When the Docker daemon starts on boot,
-#      it brings these back automatically. Nothing this command does.
-#   2. Host provider-proxy — a plain `node` process. NOT managed by Docker,
-#      so it needs systemd to come back on reboot. That's what this unit
-#      handles. ExecStart calls `./stack up` which is idempotent: it
-#      reconciles compose state AND starts the proxy if it isn't running.
+# Containers are handled by `restart: unless-stopped` policies set in
+# compose.yml (the parent overlay adds them to manifest, postgres, and
+# claude-proxy so the manifest-local submodule stays untouched). When the
+# Docker daemon starts on boot, it brings these back automatically.
+# This unit ensures the SAME outcome via `./stack up` — which is
+# idempotent and re-reconciles the world to a known state on every boot
+# (including pulling fresh images if a `docker.service` delayed start
+# got the daemon running first).
 #
-# The unit is Type=oneshot + RemainAfterExit=yes so systemd treats the unit
-# as "active" after `./stack up` returns. KillMode=mixed so the nohup'd
-# proxy process stays alive in the unit's cgroup until ExecStop runs
-# `./stack down` to take it down cleanly.
+# The unit is Type=oneshot + RemainAfterExit=yes so systemd treats the
+# unit as "active" after `./stack up` returns. KillMode=mixed so any
+# long-running subprocesses outlive ExecStart and are cleaned up by
+# ExecStop running `./stack down`.
 
 SYSTEMD_UNIT_PATH="/etc/systemd/system/ai-gateway-dev-stack.service"
 
@@ -850,11 +791,12 @@ autostart_unit_content() {
   node_bin="$(command -v node 2>/dev/null || echo /usr/bin/node)"
   cat <<EOF
 [Unit]
-Description=ai-gateway-dev-stack (Manifest + provider-proxy + Homepage)
+Description=ai-gateway-dev-stack (Manifest + claude-proxy + Homepage)
 Documentation=https://github.com/JosiahSiegel/ai-gateway-dev-stack
 # Containers come back via Docker's restart policy when dockerd starts.
-# This unit's job is the host provider-proxy — but we just call ./stack
-# up so the whole world is reconciled to a known state on every boot.
+# This unit's job is to make sure that is the case, so we just call
+# ./stack up so the whole world is reconciled to a known state on every
+# boot.
 After=docker.service network-online.target
 Wants=network-online.target tailscaled.service
 Requires=docker.service
@@ -862,7 +804,6 @@ Requires=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Keep the nohup'd provider-proxy alive after ExecStart returns.
 KillMode=mixed
 TimeoutStartSec=300
 
@@ -953,13 +894,14 @@ case "$subcmd" in
   status|ps) cmd_status ;;
   logs)      cmd_logs "$@" ;;
   pull)      cmd_pull ;;
+  login)     cmd_login "$@" ;;
   opencode)  cmd_opencode ;;
   claude)    cmd_claude ;;
   expose)    cmd_expose "$@" ;;
   unexpose)  cmd_unexpose ;;
   autostart) cmd_autostart "$@" ;;
   -h|--help|help)
-    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
     ;;
   *)
     die "unknown command: $subcmd (try ./stack help)"

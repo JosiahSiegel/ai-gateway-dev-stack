@@ -7,13 +7,12 @@
 [![CI](https://github.com/JosiahSiegel/ai-gateway-dev-stack/actions/workflows/ci.yml/badge.svg)](https://github.com/JosiahSiegel/ai-gateway-dev-stack/actions/workflows/ci.yml)
 [![E2E](https://github.com/JosiahSiegel/ai-gateway-dev-stack/actions/workflows/e2e.yml/badge.svg)](https://github.com/JosiahSiegel/ai-gateway-dev-stack/actions/workflows/e2e.yml)
 [![Docker Compose](https://img.shields.io/badge/docker--compose-ready-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
-[![Node.js](https://img.shields.io/badge/node-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macOS%20%7C%20WSL-blue)](#requirements)
 
 Bundles [Manifest](https://manifest.build) (self-hosted gateway dashboard),
-[provider-proxy](https://github.com/JosiahSiegel/provider-proxy) (header/body
-patcher), and a [gethomepage.dev](https://gethomepage.dev) landing page into a
-single clone-and-go dev environment.
+[claude-proxy](https://github.com/JosiahSiegel/claude-proxy) (Claude Code OAuth
+subscription proxy), and a [gethomepage.dev](https://gethomepage.dev) landing
+page into a single clone-and-go dev environment.
 
 </div>
 
@@ -26,7 +25,7 @@ single clone-and-go dev environment.
 - [Quickstart](#quickstart)
 - [Cheap cloud deployment](#cheap-cloud-deployment)
 - [Hook up clients](#hook-up-clients)
-- [Configuring proxy routes](#configuring-proxy-routes)
+- [Configuring Claude Code auth](#configuring-claude-code-auth)
 - [Homepage dashboard](#homepage-dashboard)
 - [Operational docs](#operational-docs)
 - [Commands](#commands)
@@ -43,7 +42,7 @@ rate limiting, and a single token** without each tool needing direct upstream
 credentials. This stack pre-wires the three pieces so the only thing you do is
 `./stack up`.
 
-- **Minimal host install** — reverse-proxy-only use needs Node.js; PTY-backed `agy` support uses the provider-proxy `node-pty` dependency.
+- **Minimal host install** — only Docker and Bash. claude-proxy runs as a Docker compose service with no host-side Node or Python needed.
 - **One `.env`** for the whole stack, with auto-generated secrets on first run.
 - **Stack-internal services auto-appear** on the Homepage via Docker labels.
 - **Compatible with existing `manifest-local` installs** — same Compose project name and Postgres volume.
@@ -53,28 +52,23 @@ credentials. This stack pre-wires the three pieces so the only thing you do is
 ```text
    request pipe ───────────────────────────────────────────────────────────►
 ┌─────────────────────┐   ┌────────────────────┐   ┌──────────────────────┐   ┌──────────────┐
-│ OpenCode /          │──►│ Manifest           │──►│ provider-proxy       │──►│ upstream LLM │
-│ Claude Code         │   │ (Docker :2099)     │   │ (host :9997)         │   │ providers    │
-└─────────────────────┘   └────────────────────┘   └──────────────────────┘   └───────┬──────┘
-                                                               │                       │
-                                                               └─ /agy/v1 -> agy --print
+│ OpenCode /          │──►│ Manifest           │──►│ claude-proxy         │──►│ Anthropic    │
+│ Claude Code         │   │ (Docker :2099)     │   │ (Docker :8080,       │   │ Claude Code  │
+│ (host CLI)          │   │                    │   │  in-network only)    │   │ OAuth        │
+└─────────────────────┘   └────────────────────┘   └──────────────────────┘   └──────────────┘
 
   side-car (not on the request pipe):
     Homepage (Docker :2100)  — landing page tiles for the stack
     tailnet-poller           — optional, profile: tailnet
 ```
 
-Manifest reaches the host proxy via `host.docker.internal:${PROXY_PORT}` when
-provider-proxy runs on the same machine as the stack. The proxy can also run on a
-separate Windows machine where `agy` is authenticated in that user's desktop
-session; in that case, expose the proxy only over your tailnet and point Manifest
-at `http://<windows-tailnet-name>:9999/agy/v1`. The proxy defaults to binding
-`127.0.0.1` (not exposed to Docker networks or the LAN). On Linux, where
-`host.docker.internal` resolves to the Docker bridge rather than the loopback,
-`PROXY_BIND=0.0.0.0` is required so the container can connect; on Windows,
-`PROXY_BIND=0.0.0.0` is also required when tailnet peers need to reach the local
-proxy. In both cases, the host firewall must block the proxy port from untrusted
-networks. See the "Linux note" under cloud deployment.
+`claude-proxy` runs as a compose service on the shared `frontend` Docker network
+and is reached in-network by Manifest at `http://claude-proxy:8080`. Because it
+is only consumed by Manifest on the same compose project, no host port is
+published by default. Authentication is via the Claude Code OAuth subscription:
+run `./stack login` once to complete the one-time browser flow; credentials
+persist in the `claude-proxy-credentials` named volume across restarts and host
+reboots (with autostart enabled).
 
 ## Quickstart
 
@@ -83,6 +77,16 @@ git clone --recurse-submodules https://github.com/JosiahSiegel/ai-gateway-dev-st
 cd ai-gateway-dev-stack
 ./stack up
 ```
+
+Then:
+
+1. Open <http://localhost:2099> and finish Manifest's `/setup` wizard.
+2. In Manifest, add the Anthropic-compatible provider (Settings → Providers →
+   Add provider) with Base URL `http://claude-proxy:8080`, API kind `anthropic`,
+   API key left blank. See [Configuring Claude Code auth](#configuring-claude-code-auth).
+3. Run `./stack login` to authenticate Claude Code OAuth (one-time; opens a
+   browser URL; required before first use).
+4. Optional: open <http://localhost:2100> for the Homepage landing page.
 
 ## Cheap cloud deployment
 
@@ -103,15 +107,21 @@ live in [`docs/cloud-deployment.md`](docs/cloud-deployment.md).
 
 `./stack up` will, in order:
 
-1. Initialize the `manifest-local` and `provider-proxy` submodules if needed.
-2. Install `provider-proxy` npm dependencies when its `package.json` is present, so PTY-backed `/agy` support can load `node-pty`.
-3. Create `.env` from `.env.example` on first run.
-4. Auto-generate `BETTER_AUTH_SECRET` and `MANIFEST_ENCRYPTION_KEY`.
-5. Seed `proxy.routes.json` from `proxy.routes.example.json` (`/openai` + `/kimi`).
-6. Seed `homepage/.generated/services.yaml` from the template.
-7. Bring up Manifest + Postgres + Homepage via Docker Compose.
-8. Start `provider-proxy` on the host (binds `127.0.0.1:9997` by default; see
-   `PROXY_BIND` for the Linux Docker case).
+1. Initialize the `manifest-local` and `claude-proxy` submodules if needed.
+2. Create `.env` from `.env.example` on first run.
+3. Auto-generate `BETTER_AUTH_SECRET` and `MANIFEST_ENCRYPTION_KEY`.
+4. Seed `homepage/.generated/services.yaml` from the template.
+5. Bring up Manifest + Postgres + claude-proxy + Homepage via Docker Compose.
+6. Print a one-time hint to run `./stack login` to complete Claude OAuth.
+
+`make build` runs only when the CLI version changes or after a code change in
+`claude-proxy/`. Build the image locally (no registry pull) before the first
+`./stack up` if you are offline:
+
+```bash
+cd claude-proxy && make build && cd ..
+./stack up
+```
 
 Then open:
 
@@ -120,24 +130,21 @@ Then open:
 | <http://localhost:2099> | Finish Manifest's `/setup` wizard to create your admin account |
 | <http://localhost:2100> | Homepage landing page for the stack |
 
-In the Manifest dashboard, add a provider whose **Base URL** points at the proxy
-from inside Docker:
+Once Manifest is up, run `./stack login` once to complete the Claude OAuth flow
+(opens a browser URL; required before first use). Then add the Anthropic-
+compatible provider in Manifest (Settings → Providers → Add provider) with:
 
-```text
-http://host.docker.internal:9997/openai/v1
-http://host.docker.internal:9997/kimi/coding/v1
-http://host.docker.internal:9997/agy/v1
-```
+| Field | Value |
+|---|---|
+| Base URL | `http://claude-proxy:8080` (in-network; reached by Manifest) |
+| API kind | `anthropic` |
+| API key | _leave blank_ — subscription mode, no upstream Anthropic key |
 
-The path after the `pathPrefix` is forwarded upstream verbatim, so each provider's
-"real" path lives here: `/openai/v1` -> `api.openai.com/v1`,
-`/kimi/coding/v1` -> `api.kimi.com/coding/v1` (Kimi's coding-tuned endpoint).
-The `/agy/v1` route is built into provider-proxy and wraps the local `agy --print`
-CLI; use model `agy/antigravity`. To authenticate `agy` on a VPS, open the UI over
-private Tailscale at `http://<vps-tailnet-name>:9997/agy/` and complete the Google
-login flow for the same OS user that runs `provider-proxy`. Keep `/agy` private to
-localhost or your tailnet; set `AGY_PROVIDER_API_KEY` if non-local clients can
-reach `/agy/v1`, and do not expose the setup UI through public Funnel.
+`http://claude-proxy:8080` resolves on the `frontend` Docker bridge by service
+name; no host port is published, so the URL is not reachable from your browser
+or from outside the compose network. Add more providers through the same UI for
+any upstream LLM you want Manifest to broker (OpenAI, Ollama, Kimi, etc.) — only
+the Claude-shaped provider points at claude-proxy.
 
 > **Windows users**: use `.\stack.ps1 <command>`. It forwards into WSL or Git Bash automatically.
 
@@ -166,27 +173,27 @@ mkdir -p .claude
 `settings.local.json` holds your Manifest token — it's gitignored and should
 stay local.
 
-## Configuring proxy routes
+## Configuring Claude Code auth
 
-Routes live in **`proxy.routes.json`** at the repo root (gitignored). On first
-run, `./stack up` copies `proxy.routes.example.json` into place.
+The stack no longer runs a host-side reverse proxy. claude-proxy is its own
+compose service on the `frontend` Docker network and is reached by Manifest
+in-network at `http://claude-proxy:8080`. Configuring it is a one-time OAuth
+login:
 
-Manifest reaches upstream proxy routes through the host proxy:
-
-```text
-http://host.docker.internal:9997/openai/v1
-http://host.docker.internal:9997/kimi/coding/v1
+```bash
+./stack login
 ```
 
-The built-in `agy` provider is not configured in `proxy.routes.json`; use
-`http://host.docker.internal:9997/agy/v1` and configure it with `AGY_*` variables
-in `.env` when needed.
+`./stack login` opens an interactive Claude Code OAuth flow inside the
+`claude-proxy` container (the browser window is yours; the OAuth tokens are
+written to the `claude-proxy-credentials` named volume). Re-run it whenever
+the subscription expires or you rotate credentials.
 
-Edit `proxy.routes.json`, then run `./stack restart`. The script validates the
-JSON before starting the proxy.
-
-For route fields, single-target mode, and proxy behavior, see
-[`docs/proxy-routes.md`](docs/proxy-routes.md).
+Canonical Claude Code CLI setup, OAuth scopes, and the full API surface live in
+[`claude-proxy/README.md`](claude-proxy/README.md). Operator-facing integration
+notes (Manifest provider config, in-container verification, log tailing,
+troubleshooting, migration notes from the previous host-proxy setup) live in
+[`docs/claude-proxy.md`](docs/claude-proxy.md).
 
 ## Homepage dashboard
 
@@ -261,7 +268,7 @@ SSH/tag tradeoffs, see [`docs/tailscale.md`](docs/tailscale.md).
 
 - [`docs/cloud-deployment.md`](docs/cloud-deployment.md) — VPS setup, Linux Docker networking, UFW, and autostart.
 - [`docs/tailscale.md`](docs/tailscale.md) — Serve/Funnel policy, Service recovery, WSL-hosted services, and SSH/tag tradeoffs.
-- [`docs/proxy-routes.md`](docs/proxy-routes.md) — route file fields, reload flow, and single-target mode.
+- [`docs/claude-proxy.md`](docs/claude-proxy.md) — in-stack integration guide, OAuth flow, operator setup.
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — common failure modes and fixes.
 
 ## Commands
@@ -270,13 +277,14 @@ SSH/tag tradeoffs, see [`docs/tailscale.md`](docs/tailscale.md).
 |---|---|
 | `./stack up` | Start the full stack |
 | `./stack down` | Stop everything |
-| `./stack restart` | Down + up (rebuilds host proxy too) |
+| `./stack restart` | Down + up (recreates compose services) |
 | `./stack restart <svc>...` | Recreate specific compose services (re-reads labels + env) |
-| `./stack status` | Show container + proxy state (`ps` is an alias) |
-| `./stack logs` | Tail Manifest, Postgres, and proxy logs |
-| `./stack pull` | Update submodules + Docker images |
+| `./stack status` | Show container state (`ps` is an alias) |
+| `./stack logs` | Tail logs (Manifest, Postgres, claude-proxy, and Homepage) |
+| `./stack pull` | Update submodules + Docker images + `make build` for claude-proxy |
 | `./stack opencode` | Print an OpenCode config snippet (JSON on stdout) |
 | `./stack claude` | Print Claude Code `.claude/*` settings (JSON on stdout) |
+| `./stack login` | Run the Claude OAuth login in the claude-proxy container (interactive; one-time per host) |
 | `./stack expose` | Configure Tailscale Serve/Funnel + `.env` for this node (interactive) |
 | `./stack unexpose` | Remove this node's Tailscale Serve/Funnel (idempotent) |
 | `./stack autostart enable` \| `disable` \| `status` | Install/remove a systemd unit so the stack comes back after a host reboot (Linux + systemd) |
@@ -286,8 +294,9 @@ On Windows without WSL or Git Bash, use `.\stack.ps1 <command>` instead.
 ## Environment variables
 
 All configuration lives in a single root `.env`. `./stack up` creates it from
-`.env.example` and auto-generates the two required secrets. Routes are **not**
-in `.env` — they live in `proxy.routes.json`.
+`.env.example` and auto-generates the two required secrets. Routes are no
+longer a thing in this stack — claude-proxy is a self-contained OAuth proxy
+whose knobs are listed below.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -301,23 +310,18 @@ in `.env` — they live in `proxy.routes.json`.
 | `MANIFEST_TELEMETRY_DISABLED` | _unset_ | Set `1` to disable anonymous Manifest telemetry |
 | `POSTGRES_PASSWORD` | `manifest` | Postgres password; keep in sync with `DATABASE_URL` if both are set |
 | `DATABASE_URL` | `postgresql://manifest:manifest@postgres:5432/manifest` | Manifest Postgres connection string |
-| `PROXY_PORT` | `9997` | Host proxy port |
-| `PROXY_BIND` | `127.0.0.1` | Host proxy bind address. Set to `0.0.0.0` on Linux when a Docker container must reach the proxy via `host.docker.internal`. |
-| `PROXY_TARGET_HOST` | _unset_ | Single-target alternative to `proxy.routes.json` |
-| `PROXY_TARGET_PROTOCOL` | `https` | Protocol for single-target proxy mode |
-| `PROXY_TARGET_PORT` | `443` | Port for single-target proxy mode |
-| `PROXY_USER_AGENT` | _set_ | Default UA injected on every upstream request |
-| `PROXY_EXTRA_HEADERS` | _unset_ | JSON object of extra global headers |
-| `PROXY_DEBUG`, `PROXY_DEBUG_BODY` | _unset_ | Verbose logging |
-| `AGY_PATH_PREFIX` | `/agy` | Built-in Antigravity/agy provider route prefix; do not add this to `proxy.routes.json` |
-| `AGY_BIN` | auto-detected / `agy` | Explicit `agy` binary path |
-| `AGY_MODEL` | `agy/antigravity` | Model ID returned by `/agy/v1/models` |
-| `AGY_TIMEOUT_MS` | `300000` | Per-request `agy --print` timeout |
-| `AGY_MAX_CONCURRENCY` | `1` | Maximum concurrent `agy` subprocesses |
-| `AGY_PROVIDER_API_KEY` | _unset_ | Optional bearer token required from clients hitting `/agy/v1` |
-| `AGY_USE_PTY` | enabled when `node-pty` is installed | Set `0` to disable PTY/ConPTY mode |
-| `AGY_ARG_PROMPT_MAX_BYTES` | `16000` | Prompts above this size are passed to `agy` through a temporary file reference to avoid OS argument-length limits |
-| `AGY_DEBUG` | _unset_ | Set `1` for subprocess diagnostics |
+| `CLAUDE_PROXY_HOST` | `0.0.0.0` | Bind address inside the `claude-proxy` container (must stay all-interfaces so Manifest can reach it on the `frontend` bridge) |
+| `CLAUDE_PROXY_PORT` | `8080` | Container-internal listen port (in-network only; no host publish) |
+| `CLAUDE_PROXY_LOG_LEVEL` | `INFO` | Standard Python level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `CLAUDE_PROXY_AUTH_TOKEN` | _empty_ | Bearer token every `/v1/messages` caller must present. Empty = trust localhost only (recommended for single-user dev). For LAN/tailnet exposure, set to `openssl rand -hex 32`. |
+| `CLAUDE_PROXY_SETTINGS_FILE` | `/etc/claude-proxy/claude-settings.json` | Path to the settings pin file; the image ships a default at this path; mount your own via the `claude-proxy-config` volume to override |
+| `CLAUDE_PROXY_WORK_DIR` | `/var/lib/claude-proxy/sessions` | Working directory for session transcripts (persisted via `claude-proxy-data` volume) |
+| `CLAUDE_PROXY_NUM_SLOTS` | `1` | Subscription slots; v1 default is 1. Multi-slot is wired but not load-tested. |
+| `CLAUDE_PROXY_ALLOWED_CLI_VERSIONS` | `2.1.233` | Comma-separated CLI version allowlist. Matches the `CLAUDE_VERSION` baked into the image; defense-in-depth at runtime. |
+| `CLAUDE_PROXY_ENABLE_TOOLS` | `false` | Set `true` to surface `tool_use` blocks to API clients (v1 default is `false` — the CLI runs the tool loop internally) |
+| `CLAUDE_PROXY_STRUCTURED_LOGS` | `true` | Emit JSON-structured logs (parsed transparently by `./stack logs`) |
+| `CLAUDE_PROXY_CREDENTIALS_PATH_TEMPLATE` | `{home}/.claude/.credentials.json` | Path pattern for the OAuth credentials file; `{home}` and `{slot=N}` template vars are supported |
+| `CLAUDE_PROXY_MODELS` | _empty_ | Comma-separated `api_name:cli_short_name` pairs (e.g. `claude-sonnet-4-5:sonnet,claude-opus-4-5:opus`). Drives both `/v1/models` and body model → `claude --model` alias lookup. Empty = built-in 7-model fallback. Override when Anthropic ships new model versions so the upgrade is an env-var change, not a code change. |
 | `HOMEPAGE_PORT` | `2100` | Homepage dashboard port |
 | `HOMEPAGE_ALLOWED_HOSTS` | `localhost:2100` | CSRF allow-list (add tailnet host here) |
 | `HOMEPAGE_PUBLIC_URL` | _unset_ | Public URL Homepage should link to itself with, usually a tailnet URL |
@@ -338,36 +342,30 @@ See `.env.example` for the full annotated list.
 ```
 
 Pulls the latest commits on each submodule's default branch, pulls the latest
-Manifest Docker image, and restarts the stack.
+Manifest Docker image, rebuilds the claude-proxy image, and restarts the stack.
 
-Quick provider-proxy-only refresh for VPS troubleshooting:
-
-```bash
-git -C provider-proxy fetch origin
-git -C provider-proxy checkout main
-git -C provider-proxy pull --ff-only
-npm --prefix provider-proxy install
-./stack restart
-```
-
-Verify behavior after restart:
+Quick claude-proxy-only refresh after a code change or CLI version bump in the
+submodule:
 
 ```bash
-curl http://127.0.0.1:${PROXY_PORT:-9997}/agy/health
-tail -n 80 .stack/proxy.log
+git -C claude-proxy fetch origin
+git -C claude-proxy checkout main
+git -C claude-proxy pull --ff-only
+cd claude-proxy && make build && cd ..
+./stack restart claude-proxy
 ```
 
-The log should show `Built-in agy PTY: enabled` when `node-pty` is installed.
-`provider-proxy/package-lock.json` is intentionally committed so submodule installs
-are reproducible. The parent repo only records a submodule commit pointer; pulling
-the parent alone does not guarantee `provider-proxy/` is on the latest commit.
+`make build` is only required when the CLI version changes or after a code
+change in `claude-proxy/`. Pulling the parent alone does not guarantee
+`claude-proxy/` is on the latest commit; the parent repo only records a
+submodule commit pointer.
 
 ## Layout
 
 ```text
 ai-gateway-dev-stack/
 ├── manifest-local/             # submodule — Manifest + Postgres compose
-├── provider-proxy/             # submodule — header/body patching proxy
+├── claude-proxy/               # submodule — Claude Code OAuth subscription proxy
 ├── homepage/                   # parent-owned — dashboard config + tailnet-poller
 │   ├── config/                 # hand-edited yaml (mounted at /app/config)
 │   ├── services.template.yaml  # source of truth for static service tiles
@@ -376,8 +374,6 @@ ai-gateway-dev-stack/
 ├── compose.yml                 # parent overrides (wires manifest, homepage, poller)
 ├── stack                       # bash orchestrator (the one command)
 ├── stack.ps1                   # PowerShell shim that delegates to bash/WSL
-├── proxy.routes.example.json   # template for proxy routes
-├── proxy.routes.json           # active routes (gitignored, seeded from example)
 ├── .env.example                # single source of truth for all config
 └── .env                        # local config (gitignored)
 ```
@@ -395,12 +391,27 @@ and database without migration.
 
 ## Requirements
 
-- **Docker** (Docker Desktop with WSL integration on Windows is fine)
-- **Node.js 18+** on the host (reverse-proxy-only use needs Node; PTY-backed `agy` support uses `node-pty` from the provider-proxy submodule)
+- **Docker** (Docker Desktop with WSL integration on Windows is fine) — no host-side Node or Python needed; claude-proxy runs in its own container
 - **Bash** (WSL, Git Bash, macOS, or Linux)
 
 ## Troubleshooting & FAQ
 
 See [`docs/troubleshooting.md`](docs/troubleshooting.md) for common failure
-modes: Manifest-to-proxy connectivity, proxy startup errors, missing Homepage
-tiles, tailnet-poller issues, and data persistence.
+modes: Manifest startup errors, missing Homepage tiles, tailnet-poller issues,
+and data persistence.
+
+Common quick checks:
+
+- **claude-proxy keeps restarting** — run `./stack login` (OAuth may have
+  expired or the credentials volume needs to be reissued), or
+  `cd claude-proxy && make build` if the image needs rebuilding after a CLI
+  version bump.
+- **Manifest can't reach `http://claude-proxy:8080`** — confirm both containers
+  are on the same compose project (`docker compose ... ps`) and that no
+  `proxy.routes.json`-style config remains in your `.env`. The URL resolves by
+  service name on the `frontend` Docker bridge; nothing reaches it from the
+  host browser.
+- **`./stack login` says "stdin is not a TTY"** — run it from a real terminal
+  (PowerShell, macOS Terminal, WSL shell, etc.). The OAuth flow needs a TTY
+  attached to forward the interactive prompts. Use `./stack login --no-tty`
+  to print the manual-instructions variant from CI.
