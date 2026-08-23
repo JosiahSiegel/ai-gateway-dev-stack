@@ -16,7 +16,7 @@ This file only covers things that are easy to get wrong when editing code here.
 Parent orchestration layer for a local AI gateway stack:
 
 - `manifest-local/` — **submodule**. Manifest dashboard + Postgres compose. Has its own `CLAUDE.md`.
-- `provider-proxy/` — **submodule**. Node reverse proxy plus integrated `/agy` OpenAI-compatible local provider; PTY-backed `agy` support uses optional `node-pty`. Has its own `CLAUDE.md`.
+- `claude-proxy/` — **submodule**. Anthropic-Messages-compatible OAuth subscription proxy. Self-contained Python + FastAPI image; no host-side Node or Python needed. Has its own `CLAUDE.md` and `README.md`.
 - `homepage/` — **parent-owned**, not a submodule. gethomepage.dev config + an optional tailnet-poller sidecar.
 
 **Do not modify submodule internals from the parent repo** unless the task is
@@ -47,12 +47,12 @@ docker compose --project-directory . --env-file .env \
 
 ### `proxy.routes.json` is the single source of truth for upstream routes
 
-Routes for forwarded upstream providers are **not** in `.env`. Built-in routes such as `/agy` are implemented by `provider-proxy.js` itself and are configured with `AGY_*` env vars, not route objects. The `./stack` script:
+Routes for forwarded upstream providers are **not** in `.env`. Built-in routes such as `/agy` are implemented by `claude-proxy` itself and are configured with `AGY_*` env vars, not route objects. The `./stack` script:
 
 1. Seeds `proxy.routes.json` from `proxy.routes.example.json` on first boot.
 2. Validates it as JSON before starting the proxy (clearer error than the
    proxy itself would emit).
-3. Exports its contents as `TARGETS` to `provider-proxy.js`.
+3. Exports its contents as `TARGETS` to `claude-proxy`.
 
 Legacy `PROXY_TARGETS=...` lines in `.env` are migrated into
 `proxy.routes.json` automatically by `ensure_routes()` and then ignored.
@@ -166,12 +166,11 @@ Two independent reboot-survival mechanisms, easy to confuse:
    submodule stays minimal and the parent stack gets autostart by
    default. Don't push restart policies into the submodule — that breaks
    the standalone-vs-parent separation.
-2. **Host `provider-proxy`** is a plain Node process, NOT managed by
-   Docker, so it needs systemd. `./stack autostart enable` writes
-   `/etc/systemd/system/ai-gateway-dev-stack.service` and runs `./stack
-   up` on boot. The unit is `Type=oneshot + RemainAfterExit=yes +
-   KillMode=mixed` so the nohup'd proxy survives in the unit's cgroup
-   after `ExecStart` returns. `ExecStop=./stack down` does clean
+2. **Host stack autostart** needs systemd. `./stack autostart enable`
+   writes `/etc/systemd/system/ai-gateway-dev-stack.service` and runs
+   `./stack up` on boot. The unit is `Type=oneshot + RemainAfterExit=yes +
+   KillMode=mixed` so the compose-managed services survive in the unit's
+   cgroup after `ExecStart` returns. `ExecStop=./stack down` does clean
    teardown.
 
 `autostart status` diffs the installed unit against the freshly-generated
@@ -201,8 +200,8 @@ hand-rolls.
 - `docker compose ... config --quiet` with and without `--profile tailnet`.
 - `./stack opencode` and `./stack claude` stdout must be valid JSON; the
   claude output is asserted to contain both `settings` and `settings_local`
-  blocks with the right env vars. If helper output adds providers such as
-  `proxy-agy`, update CI assertions in lockstep.
+  blocks with the right env vars. If helper output adds new providers,
+  update CI assertions in lockstep.
 - `proxy.routes.example.json` must be a JSON array of `{pathPrefix, host, ...}`.
 - `node --check` on the proxy and the tailnet-poller scripts.
 
