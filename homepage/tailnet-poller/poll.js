@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Poll the Tailscale API and merge live tailnet devices into
-// homepage/config/services.yaml. Zero dependencies — mirrors the style of
-// provider-proxy/provider-proxy.js so the repo stays node-built-ins-only.
+// homepage/config/services.yaml. Zero dependencies — node-built-ins only,
+// so the poller image needs no npm install step at build time.
 //
 // Env (one of the auth pairs is required):
 //   TAILSCALE_OAUTH_CLIENT_ID + TAILSCALE_OAUTH_CLIENT_SECRET
