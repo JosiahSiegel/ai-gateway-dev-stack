@@ -22,3 +22,8 @@ homepage/config/proxmox.yaml
 homepage/config/custom.css
 homepage/config/custom.js
 homepage/config/logs/
+
+# Sandbox side-channels: agent scratch dirs and orchestration metadata that
+# should never enter version control.
+test-plugin/
+.omo/
