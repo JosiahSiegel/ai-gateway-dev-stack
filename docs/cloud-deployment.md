@@ -112,8 +112,8 @@ curl http://host.docker.internal:${PROXY_PORT:-9997}/agy/health
 
 The stack auto-recovers from a VPS reboot in two pieces:
 
-1. **Containers** — `manifest`, `postgres`, `homepage`, and the optional `tailnet-poller` use `restart: unless-stopped`, so Docker brings them back when it starts.
-2. **Host `provider-proxy`** — a plain Node process, not managed by Docker. Install the systemd unit once:
+1. **Containers** — `manifest`, `postgres`, `claude-proxy`, `homepage`, and the optional `tailnet-poller` use `restart: unless-stopped`, so Docker brings them back when it starts.
+2. **Systemd autostart** — even with `restart: unless-stopped`, Docker itself needs the host to be up. Install the systemd unit once to make the stack reboot-survivable:
 
 ```bash
 sudo ./stack autostart enable
