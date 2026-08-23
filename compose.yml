@@ -11,12 +11,14 @@
 # so existing standalone installs keep their containers/volumes.
 #
 # This file adds:
-#   - homepage    : gethomepage.dev dashboard (Docker label auto-discovery)
+#   - claude-proxy : Anthropic-Messages-compatible subscription proxy
+#                    (built from ./claude-proxy; OAuth-only; frontend only)
+#   - homepage     : gethomepage.dev dashboard (Docker label auto-discovery)
 #   - tailnet-poller : optional sidecar that mirrors tailnet devices into
 #                      homepage/config/services.yaml (profile: tailnet)
 #
-# The provider-proxy still runs on the host (it binds 127.0.0.1 by design),
-# managed by the ./stack script — it is not a container.
+# claude-proxy runs as a compose service on the frontend network (no host port
+# publish; reached in-network at http://claude-proxy:8080 by Manifest).
 
 services:
   # Manifest is intentionally NOT decorated with homepage.* labels here.
@@ -48,6 +50,72 @@ services:
     # Same reasoning as manifest above — make Postgres come back on reboot
     # without modifying the submodule.
     restart: unless-stopped
+
+  # claude-proxy (./claude-proxy submodule): subscription OAuth proxy for
+  # Anthropic-Messages-compatible calls. Reaches the host network only via the
+  # frontend bridge (NOT internal — it has no need for postgres). Built from
+  # the submodule so `git submodule update` against a newer claude-proxy
+  # commit picks up the change on next image rebuild.
+  claude-proxy:
+    build:
+      context: ./claude-proxy
+    image: claude-proxy:dev
+    # The image is built locally from ./claude-proxy and is NOT in any
+    # registry. Without `pull_policy: never`, Docker Compose V2 tries to
+    # pull `claude-proxy:dev` from a registry first and emits a misleading
+    # "pull access denied" warning even though the build will then succeed.
+    # `never` short-circuits the pull and goes straight to the build context.
+    # For fresh installs the operator must run `make build` in claude-proxy/
+    # before `./stack up` (handled by cloud-init.yaml / bootstrap-vps.sh);
+    # `./stack pull` (which calls `make build` itself) keeps the image fresh.
+    pull_policy: never
+    container_name: claude-proxy
+    restart: unless-stopped
+    user: "1000:1000"
+    init: true
+    # No `ports:` block — in-network only. Manifest reaches it at
+    # http://claude-proxy:8080 via the frontend bridge.
+    networks:
+      - frontend
+    environment:
+      CLAUDE_PROXY_HOST: "0.0.0.0"
+      CLAUDE_PROXY_PORT: ${CLAUDE_PROXY_PORT:-8080}
+      CLAUDE_PROXY_LOG_LEVEL: ${CLAUDE_PROXY_LOG_LEVEL:-INFO}
+      CLAUDE_PROXY_SETTINGS_FILE: ${CLAUDE_PROXY_SETTINGS_FILE:-/etc/claude-proxy/claude-settings.json}
+      CLAUDE_PROXY_WORK_DIR: ${CLAUDE_PROXY_WORK_DIR:-/var/lib/claude-proxy/sessions}
+      CLAUDE_PROXY_NUM_SLOTS: ${CLAUDE_PROXY_NUM_SLOTS:-1}
+      CLAUDE_PROXY_ALLOWED_CLI_VERSIONS: ${CLAUDE_PROXY_ALLOWED_CLI_VERSIONS:-}
+      CLAUDE_PROXY_AUTH_TOKEN: ${CLAUDE_PROXY_AUTH_TOKEN:-}
+      CLAUDE_PROXY_USER_RATE_LIMIT_CAPACITY: ${CLAUDE_PROXY_USER_RATE_LIMIT_CAPACITY:-60}
+      CLAUDE_PROXY_USER_RATE_LIMIT_REFILL_PER_SECOND: ${CLAUDE_PROXY_USER_RATE_LIMIT_REFILL_PER_SECOND:-1.0}
+      CLAUDE_PROXY_ENABLE_TOOLS: ${CLAUDE_PROXY_ENABLE_TOOLS:-false}
+      CLAUDE_PROXY_STRUCTURED_LOGS: ${CLAUDE_PROXY_STRUCTURED_LOGS:-true}
+      CLAUDE_PROXY_CREDENTIALS_PATH_TEMPLATE: ${CLAUDE_PROXY_CREDENTIALS_PATH_TEMPLATE:-{home}/.claude/.credentials.json}
+      CLAUDE_PROXY_MODELS: ${CLAUDE_PROXY_MODELS:-}
+    volumes:
+      - claude-proxy-credentials:/home/claude-proxy/.claude
+      - claude-proxy-data:/var/lib/claude-proxy/sessions
+      - claude-proxy-config:/etc/claude-proxy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: 5
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    cpus: "2.0"
 
   homepage:
     image: ghcr.io/gethomepage/homepage:latest
@@ -110,3 +178,14 @@ services:
     networks:
       - frontend
     profiles: ["tailnet"]
+
+# Top-level named volumes. Pin `name:` so a standalone claude-proxy install
+# that already created these volumes is adopted by the parent stack (same
+# trick `manifest-local` uses for `pgdata`).
+volumes:
+  claude-proxy-credentials:
+    name: claude-proxy-credentials
+  claude-proxy-data:
+    name: claude-proxy-data
+  claude-proxy-config:
+    name: claude-proxy-config
