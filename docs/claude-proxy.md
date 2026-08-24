@@ -90,6 +90,7 @@ surface (matching the upstream `claude-proxy/docker-compose.yml` defaults):
 | `CLAUDE_PROXY_AUTH_TOKEN` | _empty_ | Bearer token every `/v1/messages` caller must present. Empty = trust localhost only (recommended single-user dev). For LAN/tailnet exposure, set to `openssl rand -hex 32` |
 | `CLAUDE_PROXY_SETTINGS_FILE` | `/etc/claude-proxy/claude-settings.json` | Path to the settings pin file. The image ships a default at this path; mount your own via the `claude-proxy-config` volume to override |
 | `CLAUDE_PROXY_WORK_DIR` | `/var/lib/claude-proxy/sessions` | Working directory for session transcripts (persisted via the `claude-proxy-data` volume) |
+| `CLAUDE_PROXY_ALLOWED_WORKSPACE_ROOTS` | `/workspaces` | Default-allowlist for X-Workspace-Path. |
 | `CLAUDE_PROXY_NUM_SLOTS` | `1` | Subscription slots. v1 default is 1 (single Pro/Max account). Multi-slot is wired but not load-tested. |
 | `CLAUDE_PROXY_ALLOWED_CLI_VERSIONS` | `2.1.233` | Comma-separated CLI version allowlist. Matches the `CLAUDE_VERSION` baked into the Dockerfile; defense-in-depth at runtime so a stale build cannot run a newer/older CLI silently |
 | `CLAUDE_PROXY_USER_RATE_LIMIT_CAPACITY` | `60` | Per-user token-bucket burst size |

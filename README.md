@@ -316,6 +316,7 @@ whose knobs are listed below.
 | `CLAUDE_PROXY_AUTH_TOKEN` | _empty_ | Bearer token every `/v1/messages` caller must present. Empty = trust localhost only (recommended for single-user dev). For LAN/tailnet exposure, set to `openssl rand -hex 32`. |
 | `CLAUDE_PROXY_SETTINGS_FILE` | `/etc/claude-proxy/claude-settings.json` | Path to the settings pin file; the image ships a default at this path; mount your own via the `claude-proxy-config` volume to override |
 | `CLAUDE_PROXY_WORK_DIR` | `/var/lib/claude-proxy/sessions` | Working directory for session transcripts (persisted via `claude-proxy-data` volume) |
+| `CLAUDE_PROXY_ALLOWED_WORKSPACE_ROOTS` | `/workspaces` | Default-allowlist for X-Workspace-Path. |
 | `CLAUDE_PROXY_NUM_SLOTS` | `1` | Subscription slots; v1 default is 1. Multi-slot is wired but not load-tested. |
 | `CLAUDE_PROXY_ALLOWED_CLI_VERSIONS` | `2.1.233` | Comma-separated CLI version allowlist. Matches the `CLAUDE_VERSION` baked into the image; defense-in-depth at runtime. |
 | `CLAUDE_PROXY_ENABLE_TOOLS` | `false` | Set `true` to surface `tool_use` blocks to API clients (v1 default is `false` — the CLI runs the tool loop internally) |
