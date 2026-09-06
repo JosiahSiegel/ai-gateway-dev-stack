@@ -64,25 +64,6 @@ jobs:
           echo "Homepage never became reachable on :2100" >&2
           exit 1
 
-      - name: claude-proxy is healthy (compose healthcheck reports healthy)
-        run: |
-          for i in $(seq 1 30); do
-            code="$(docker compose \
-              --project-directory . \
-              --env-file .env \
-              -f manifest-local/docker-compose.yml \
-              -f compose.yml \
-              exec -T claude-proxy \
-              curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/healthz || true)"
-            echo "attempt $i: claude-proxy /healthz=$code"
-            case "$code" in
-              200) exit 0 ;;
-            esac
-            sleep 2
-          done
-          echo "claude-proxy never became healthy" >&2
-          exit 1
-
       - name: ./stack status
         if: always()
         run: ./stack status || true
@@ -108,12 +89,6 @@ jobs:
             --env-file .env \
             -f manifest-local/docker-compose.yml \
             -f compose.yml logs homepage || true
-          echo "--- claude-proxy ---"
-          docker compose \
-            --project-directory . \
-            --env-file .env \
-            -f manifest-local/docker-compose.yml \
-            -f compose.yml logs claude-proxy || true
 
       - name: Tear stack down
         if: always()

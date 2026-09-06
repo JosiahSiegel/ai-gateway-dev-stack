@@ -107,4 +107,3 @@ Only add that rule if devices with those tags should have root SSH access to the
 - Funnel ports are limited to `443`, `8443`, or `10000`; `./stack expose` defaults to `443`.
 - Funnel and a Service `serve` cannot share the same port on the same node; `tailscaled` only binds the port once.
 - The default `--manifest=funnel` gives Manifest a public Funnel URL. Use `--manifest=service` for a tailnet-only hostname.
-- `claude-proxy` is not managed by `./stack expose` as a public Serve/Funnel target. If you need direct debug access from a host browser, follow [`docs/claude-proxy.md`](claude-proxy.md#tailscale-exposure-optional-for-direct-debug-access) instead — that doc walks through an ad-hoc `tailscale serve` setup with `CLAUDE_PROXY_AUTH_TOKEN` as the bearer.

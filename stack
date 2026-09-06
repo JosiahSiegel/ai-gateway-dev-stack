@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 # ai-gateway-dev-stack — one-command orchestrator.
 #
-#   ./stack up        Bring everything up (manifest + postgres + claude-proxy)
+#   ./stack up        Bring everything up (manifest + postgres + homepage)
 #   ./stack down      Stop everything
 #   ./stack restart           Restart everything
 #   ./stack restart <svc>...  Restart only the given compose service(s)
 #   ./stack status    Show what's running
-#   ./stack logs      Tail logs from manifest + claude-proxy
+#   ./stack logs      Tail logs from the compose services
 #   ./stack pull      Pull latest submodules + Docker images
-#   ./stack login     Run the Claude OAuth login in the claude-proxy container
-#                     (interactive; one-time per host)
 #   ./stack opencode  Print an opencode.json snippet pre-wired to this stack
 #   ./stack claude    Print Claude Code settings (.claude/*) pre-wired to this stack
 #   ./stack expose    Configure Tailscale Serve/Funnel + .env (interactive)
@@ -17,8 +15,8 @@
 #   ./stack autostart enable|disable|status   Install/remove a systemd unit so
 #                     the stack comes back on host reboot (Linux + systemd only)
 #
-# Assumptions: Docker (or Docker Desktop with WSL integration), Node.js, and
-# Bash. Works in WSL, macOS, Linux, and Git Bash on Windows.
+# Assumptions: Docker (or Docker Desktop with WSL integration) and Bash.
+# Works in WSL, macOS, Linux, and Git Bash on Windows.
 
 set -euo pipefail
 
@@ -70,7 +68,7 @@ require_cmd() {
 }
 
 ensure_submodules() {
-  if [ ! -f "$ROOT/manifest-local/docker-compose.yml" ] || [ ! -f "$ROOT/claude-proxy/Dockerfile" ]; then
+  if [ ! -f "$ROOT/manifest-local/docker-compose.yml" ]; then
     log "initializing submodules"
     git submodule update --init --recursive
   fi
@@ -267,14 +265,6 @@ manifest_openai_base_url() {
   esac
 }
 
-# --- claude-proxy helpers --------------------------------------------------
-
-# Print a one-line hint that surfaces after `./stack up` so users know the
-# OAuth step is still pending. The actual flow lives in cmd_login.
-claude_proxy_first_run_hint() {
-  log "Claude OAuth: run ./stack login once before first use"
-}
-
 # --- commands --------------------------------------------------------------
 
 cmd_up() {
@@ -284,14 +274,11 @@ cmd_up() {
   ensure_tailscale_identity_env
   ensure_homepage_seed
 
-  log "starting manifest + postgres + claude-proxy + homepage (docker compose)"
+  log "starting manifest + postgres + homepage (docker compose)"
   compose up -d
 
-  claude_proxy_first_run_hint
-
-  local port claude_proxy_port homepage_port tailnet_msg
+  local port homepage_port tailnet_msg
   port="$(env_get PORT)"; port="${port:-2099}"
-  claude_proxy_port="$(env_get CLAUDE_PROXY_PORT)"; claude_proxy_port="${claude_proxy_port:-8080}"
   homepage_port="$(env_get HOMEPAGE_PORT)"; homepage_port="${homepage_port:-2100}"
   if tailnet_enabled; then
     tailnet_msg="enabled (tailnet-poller running)"
@@ -305,7 +292,6 @@ cmd_up() {
 
     Homepage dashboard:  http://localhost:${homepage_port}
     Manifest dashboard:  http://localhost:${port}
-    Claude OAuth:        run './stack login' once before first use
     Tailnet discovery:   ${tailnet_msg}
     Logs:                ./stack logs
     Tear down:           ./stack down
@@ -313,16 +299,13 @@ cmd_up() {
     Claude Code setup:   ./stack claude
 
   First-run: open the Manifest dashboard, complete the /setup wizard, then
-  add an Anthropic-compatible LLM provider pointing at the in-network
-  claude-proxy service (Base URL http://claude-proxy:${claude_proxy_port}).
+  add your LLM providers (OpenAI-compatible or Anthropic-compatible) via
+  the Manifest UI.
 
 EOF
 }
 
 cmd_down() {
-  # Docker Compose owns the claude-proxy container lifecycle — no host
-  # process to stop. host.docker.internal / claude-proxy service resolution
-  # vanish with the stack; bring it back with ./stack up.
   if command -v docker >/dev/null 2>&1; then
     compose down
   fi
@@ -345,11 +328,6 @@ cmd_restart() {
 }
 
 cmd_status() {
-  if compose ps --status running claude-proxy 2>/dev/null | grep -q claude-proxy; then
-    log "claude-proxy: running"
-  else
-    log "claude-proxy: not running (run ./stack up)"
-  fi
   compose ps
 }
 
@@ -371,100 +349,16 @@ cmd_logs() {
     return 0
   fi
 
-  # Streaming: just follow compose logs. claude-proxy is in compose, so its
-  # output shows up here automatically.
-  log "tailing manifest + claude-proxy logs (ctrl-c to stop)"
+  # Streaming: follow compose logs for all services.
+  log "tailing compose logs (ctrl-c to stop)"
   compose logs -f
 }
 
 cmd_pull() {
   log "updating submodules"
   git submodule update --remote --merge
-  log "rebuilding claude-proxy image (if its source changed)"
-  if [ -f "$ROOT/claude-proxy/Makefile" ]; then
-    ( cd "$ROOT/claude-proxy" && make build ) || warn "claude-proxy make build failed — run it manually if startup complains"
-  fi
   log "pulling docker images"
   compose pull
-}
-
-# Run the Claude OAuth login interactively inside the claude-proxy container.
-# One-time per host (creds persist in the claude-proxy-credentials named
-# volume). The flow is entirely interactive — there is no headless mode, so
-# we refuse to run on a non-TTY shell unless --no-tty is passed (in which
-# case we just print the instructions and exit).
-cmd_login() {
-  local no_tty=0
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --no-tty) no_tty=1 ;;
-      -h|--help|help)
-        cat <<EOF
-Usage: ./stack login [--no-tty]
-
-Run the Claude OAuth login interactively in the claude-proxy container.
-This is a one-time setup per host — once authenticated, credentials are
-persisted in the claude-proxy-credentials Docker volume.
-
-Arguments:
-  --no-tty   Print instructions instead of attaching to the container.
-             Use this when running from CI or a non-interactive shell.
-
-Requires:
-  - The stack must be running (./stack up).
-  - A real terminal attached (stdin must be a TTY), unless --no-tty.
-
-Notes:
-  - The login flow opens a browser URL that you paste into a browser
-    elsewhere and then paste the resulting code back into the terminal.
-  - Re-run this command any time Claude OAuth tokens need to be refreshed.
-EOF
-        return 0
-        ;;
-      *) die "unknown flag: $1 (try --no-tty)" ;;
-    esac
-    shift
-  done
-
-  require_cmd docker
-
-  # Refuse early if the container is not running — `compose exec` would
-  # hang waiting for it instead of giving a clear message.
-  if ! compose ps --status running claude-proxy 2>/dev/null | grep -q claude-proxy; then
-    die "claude-proxy container is not running. Run ./stack up first."
-  fi
-
-  if [ "$no_tty" = "1" ]; then
-    cat <<EOF
-
-  Claude OAuth login requires a real terminal.
-
-  Re-run ./stack login from an interactive shell (TTY attached). The
-  container's CLI will print a URL to open in a browser, then prompt
-  for the authorization code.
-
-  Refresh tokens by re-running this command any time the proxy logs
-  auth failures.
-
-EOF
-    return 0
-  fi
-
-  # `[ -t 0 ]` is true iff stdin is a terminal. Some wrapper scripts
-  # (e.g. `bash <(curl ...)` or CI) give us a pipe — refuse politely.
-  if [ ! -t 0 ]; then
-    cat >&2 <<EOF
-[stack] stdin is not a TTY — refusing to start an interactive OAuth flow.
-[stack] Run this command from a real terminal, or pass --no-tty to print instructions only.
-EOF
-    exit 1
-  fi
-
-  log "starting interactive Claude OAuth login in the claude-proxy container"
-  # Compose exec carries our project + env + profile flags through, so
-  # this honors the same --project-directory / --profile tailnet / .env
-  # setting as every other compose invocation here.
-  compose exec -it claude-proxy claude-proxy login
 }
 
 # Both `opencode` and `claude` emit a single parseable JSON document on
@@ -472,8 +366,7 @@ EOF
 #   ./stack opencode > ~/.config/opencode/opencode.json
 #   ./stack claude   > /tmp/claude.json   # then split into .claude/*.json
 cmd_opencode() {
-  local claude_proxy_port base_url openai_base_url model
-  claude_proxy_port="$(env_get CLAUDE_PROXY_PORT)"; claude_proxy_port="${claude_proxy_port:-8080}"
+  local base_url openai_base_url model
   base_url="$(manifest_base_url)"
   openai_base_url="$(manifest_openai_base_url "$base_url")"
   model="$(env_get CLAUDE_CODE_MODEL)"
@@ -482,9 +375,7 @@ cmd_opencode() {
   cat >&2 <<EOF
 # Drop the stdout JSON into ~/.config/opencode/opencode.json (or this
 # project's opencode.json), then restart OpenCode. Manifest is the
-# recommended entry point; the claude-proxy entry is for debugging
-# (Anthropic-shaped requests going straight to the in-network proxy)
-# and is not the normal path.
+# entry point; configure upstream providers in the Manifest UI.
 EOF
 
   cat <<EOF
@@ -498,13 +389,6 @@ EOF
         "baseURL": "${openai_base_url}"
       },
       "models": { "${model#manifest/}": { "name": "Manifest Auto" } }
-    },
-    "claude-proxy": {
-      "name": "claude-proxy (debug; Anthropic kind)",
-      "options": {
-        "npm": "@ai-sdk/anthropic",
-        "baseURL": "http://127.0.0.1:${claude_proxy_port}/v1"
-      }
     }
   }
 }
@@ -763,8 +647,8 @@ EOF
 # --- autostart (systemd unit so the stack survives host reboot) ------------
 #
 # Containers are handled by `restart: unless-stopped` policies set in
-# compose.yml (the parent overlay adds them to manifest, postgres, and
-# claude-proxy so the manifest-local submodule stays untouched). When the
+# compose.yml (the parent overlay adds them to manifest and postgres so the
+# manifest-local submodule stays untouched). When the
 # Docker daemon starts on boot, it brings these back automatically.
 # This unit ensures the SAME outcome via `./stack up` — which is
 # idempotent and re-reconciles the world to a known state on every boot
@@ -791,7 +675,7 @@ autostart_unit_content() {
   node_bin="$(command -v node 2>/dev/null || echo /usr/bin/node)"
   cat <<EOF
 [Unit]
-Description=ai-gateway-dev-stack (Manifest + claude-proxy + Homepage)
+Description=ai-gateway-dev-stack (Manifest + Homepage)
 Documentation=https://github.com/JosiahSiegel/ai-gateway-dev-stack
 # Containers come back via Docker's restart policy when dockerd starts.
 # This unit's job is to make sure that is the case, so we just call
@@ -894,14 +778,13 @@ case "$subcmd" in
   status|ps) cmd_status ;;
   logs)      cmd_logs "$@" ;;
   pull)      cmd_pull ;;
-  login)     cmd_login "$@" ;;
   opencode)  cmd_opencode ;;
   claude)    cmd_claude ;;
   expose)    cmd_expose "$@" ;;
   unexpose)  cmd_unexpose ;;
   autostart) cmd_autostart "$@" ;;
   -h|--help|help)
-    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
     ;;
   *)
     die "unknown command: $subcmd (try ./stack help)"

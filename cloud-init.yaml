@@ -26,8 +26,6 @@ runcmd:
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   - systemctl enable --now docker
   - su - ubuntu -c 'git clone --recurse-submodules https://github.com/JosiahSiegel/ai-gateway-dev-stack.git /home/ubuntu/ai-gateway-dev-stack'
-  - su - ubuntu -c 'cd /home/ubuntu/ai-gateway-dev-stack/claude-proxy && make build'
   - su - ubuntu -c 'cd /home/ubuntu/ai-gateway-dev-stack && ./stack up'
-  - su - ubuntu -c 'cd /home/ubuntu/ai-gateway-dev-stack && ./stack login --no-tty'
   # Install the systemd unit so the stack comes back on reboot.
   - /home/ubuntu/ai-gateway-dev-stack/stack autostart enable

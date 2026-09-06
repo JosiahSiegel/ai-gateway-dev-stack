@@ -2,7 +2,3 @@
 	path = manifest-local
 	url = https://github.com/JosiahSiegel/manifest-local.git
 	branch = main
-[submodule "claude-proxy"]
-	path = claude-proxy
-	url = https://github.com/JosiahSiegel/claude-proxy.git
-	branch = main
