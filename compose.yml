@@ -40,6 +40,9 @@ services:
     # 1 = summary (no PII). full = also dumps serialized body.
     environment:
       - MANIFEST_CC_DEBUG_CAPTURE=${MANIFEST_CC_DEBUG_CAPTURE:-1}
+      # Codex semantic-output wait (ms) before failing over. Requires
+      # manifest >= 6.16.0; OAuth subscription streams only.
+      - CODEX_SEMANTIC_OUTPUT_TIMEOUT_MS=${CODEX_SEMANTIC_OUTPUT_TIMEOUT_MS:-60000}
 
   postgres:
     # Same reasoning as manifest above — make Postgres come back on reboot

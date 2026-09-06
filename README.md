@@ -252,8 +252,9 @@ All configuration lives in a single root `.env`. `./stack up` creates it from
 | `BETTER_AUTH_SECRET` | _auto_ | Session signing secret (generated if blank) |
 | `MANIFEST_ENCRYPTION_KEY` | _auto_ | At-rest encryption for stored provider credentials |
 | `PROVIDER_TIMEOUT_MS` | `600000` | Manifest upstream timeout (raised for slow local models) |
-| `MANIFEST_IMAGE` | `ghcr.io/josiahsiegel/manifest:latest` | Manifest image used by Compose |
+| `MANIFEST_IMAGE` | `ghcr.io/josiahsiegel/manifest-with-plugins:latest` | Manifest image used by Compose (built from upstream HEAD by the manifest-plugins workflow) |
 | `CONCURRENCY_MAX` | `50` | Manifest per-user proxy concurrency |
+| `CODEX_SEMANTIC_OUTPUT_TIMEOUT_MS` | `60000` | Wait for deliverable output from a ChatGPT Codex subscription stream before failing over (manifest ≥ 6.16.0) |
 | `MANIFEST_TELEMETRY_DISABLED` | _unset_ | Set `1` to disable anonymous Manifest telemetry |
 | `POSTGRES_PASSWORD` | `manifest` | Postgres password; keep in sync with `DATABASE_URL` if both are set |
 | `DATABASE_URL` | `postgresql://manifest:manifest@postgres:5432/manifest` | Manifest Postgres connection string |
